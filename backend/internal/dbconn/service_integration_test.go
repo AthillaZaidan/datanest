@@ -79,8 +79,17 @@ func TestConnectionsAndAccess(t *testing.T) {
 	testutil.GrantAccess(t, db, g.ID, v.ID, authz.View)
 	testutil.GrantAccess(t, db, g2.ID, v.ID, authz.Edit)
 	list, e = s.ListForUser(ctx, u.ID)
-	if e != nil || len(list) != 1 || list[0].MyLevel != "EDIT" || list[0].Name != i.Name {
+	if e != nil || len(list) != 1 || list[0].MyLevel != "EDIT" || list[0].Name != i.Name || list[0].CurrentVersion != 0 {
 		t.Fatalf("list %+v %v", list, e)
+	}
+	for n, status := range []models.MigrationStatus{models.MigrationSuccess, models.MigrationSuccess, models.MigrationFailed} {
+		version := n + 1
+		if e = db.Create(&models.Migration{DatabaseID: v.ID, Version: &version, SQL: "select 1", Status: status, CreatedByUsername: "user"}).Error; e != nil {
+			t.Fatal(e)
+		}
+	}
+	if list, e = s.ListForUser(ctx, u.ID); e != nil || list[0].CurrentVersion != 2 {
+		t.Fatalf("current version %+v %v", list, e)
 	}
 	detail, e := s.GetForUser(ctx, u.ID, v.ID)
 	if e != nil || detail.MyLevel != "EDIT" {

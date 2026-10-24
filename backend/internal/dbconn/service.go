@@ -217,9 +217,11 @@ func (s *Service) TestSaved(ctx context.Context, id uint) (TestResult, error) {
 func (s *Service) ListForUser(ctx context.Context, uid uint) ([]View, error) {
 	var rows []struct {
 		models.DatabaseConnection
-		Level int16
+		Level          int16
+		CurrentVersion int
 	}
-	e := s.db.WithContext(ctx).Table("database_connections d").Select("d.*, MAX(g.level) AS level").Joins("JOIN grants g ON g.database_id = d.id").Joins("JOIN group_members gm ON gm.group_id = g.group_id").Where("gm.user_id = ?", uid).Group("d.id").Order("d.id").Scan(&rows).Error
+	e := s.db.WithContext(ctx).Table("database_connections d").Select(`d.*, MAX(g.level) AS level,
+ (SELECT COALESCE(MAX(m.version), 0) FROM migrations m WHERE m.database_id = d.id AND m.status = ?) AS current_version`, models.MigrationSuccess).Joins("JOIN grants g ON g.database_id = d.id").Joins("JOIN group_members gm ON gm.group_id = g.group_id").Where("gm.user_id = ?", uid).Group("d.id").Order("d.id").Scan(&rows).Error
 	if e != nil {
 		return nil, e
 	}
@@ -227,6 +229,7 @@ func (s *Service) ListForUser(ctx context.Context, uid uint) ([]View, error) {
 	for _, m := range rows {
 		v := view(m.DatabaseConnection)
 		v.MyLevel = authz.Level(m.Level).String()
+		v.CurrentVersion = m.CurrentVersion
 		out = append(out, v)
 	}
 	return out, nil
