@@ -1,19 +1,14 @@
 import type { MigrationStatus } from '../../api/migrations'
-import { Badge } from '../kit'
+import { Pill } from '../kit'
 
-const styles: Record<MigrationStatus, { label: string; tone: 'neutral' | 'amber' | 'green' | 'red'; dot: string }> = {
-  draft: { label: 'Draft', tone: 'neutral', dot: 'bg-zinc-400' },
-  running: { label: 'Berjalan', tone: 'amber', dot: 'bg-amber-500 animate-pulse' },
-  success: { label: 'Sukses', tone: 'green', dot: 'bg-emerald-500' },
-  failed: { label: 'Gagal', tone: 'red', dot: 'bg-red-500' },
+const styles: Record<MigrationStatus, { label: string; tone: 'neutral' | 'warning' | 'positive' | 'negative' }> = {
+  draft: { label: 'Draft', tone: 'neutral' },
+  running: { label: 'Berjalan', tone: 'warning' },
+  success: { label: 'Sukses', tone: 'positive' },
+  failed: { label: 'Gagal', tone: 'negative' },
 }
 
 export default function StatusBadge({ status }: { status: MigrationStatus }) {
-  const { label, tone, dot } = styles[status]
-  return (
-    <Badge tone={tone}>
-      <span className={`size-1.5 rounded-full ${dot}`} />
-      {label}
-    </Badge>
-  )
+  const { label, tone } = styles[status]
+  return <Pill tone={tone}>{label}</Pill>
 }
