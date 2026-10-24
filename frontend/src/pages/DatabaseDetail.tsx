@@ -2,7 +2,11 @@ import { Link, useParams, useSearchParams } from 'react-router'
 import { listSchemas, listTables } from '../api/explorer'
 import TableData from '../components/explorer/TableData'
 import TableStructure from '../components/explorer/TableStructure'
+import { ui } from '../components/ui'
 import { useAsync } from '../hooks/useAsync'
+
+const tabClass = (active: boolean) =>
+  `border-b-2 px-3 py-1 text-sm ${active ? 'border-blue-600 font-semibold' : 'border-transparent text-neutral-500 hover:text-inherit'}`
 
 // Selection lives in the URL so refresh and shared links keep the same view.
 export default function DatabaseDetail() {
@@ -26,30 +30,37 @@ export default function DatabaseDetail() {
     setParams(p)
   }
 
-  if (schemas.error) return <p className="error">{schemas.error.message}</p>
+  if (schemas.error) return <p className={ui.error}>{schemas.error.message}</p>
 
   return (
     <>
-      <h1>
-        Database #{databaseId} <Link to={`/databases/${databaseId}/migrations`}>Riwayat migration →</Link>
+      <h1 className={ui.h1}>
+        Database #{databaseId}
+        <Link className={ui.link} to={`/databases/${databaseId}/migrations`}>Riwayat migration →</Link>
       </h1>
 
-      <div className="explorer">
-        <aside>
-          <label>
-            Schema{' '}
-            <select value={schema} onChange={(e) => update({ schema: e.target.value, table: null, page: null })}>
+      <div className="flex gap-6">
+        <aside className="w-56 shrink-0">
+          <label className="flex items-center gap-2 text-sm">
+            Schema
+            <select
+              className={ui.select}
+              value={schema}
+              onChange={(e) => update({ schema: e.target.value, table: null, page: null })}
+            >
               {(schemas.data ?? [{ name: schema }]).map((s) => (
                 <option key={s.name} value={s.name}>{s.name}</option>
               ))}
             </select>
           </label>
-          {tables.error && <p className="error">{tables.error.message}</p>}
-          <ul>
+          {tables.error && <p className={ui.error}>{tables.error.message}</p>}
+          <ul className="mt-3 flex flex-col gap-0.5">
             {tables.data?.map((t) => (
               <li key={t.name}>
                 <button
-                  className={t.name === table ? 'active' : ''}
+                  className={`w-full rounded px-2 py-1 text-left text-sm hover:bg-neutral-500/10 ${
+                    t.name === table ? 'bg-neutral-500/20 font-semibold' : ''
+                  }`}
                   onClick={() => update({ table: t.name, page: null })}
                 >
                   {t.name}
@@ -57,22 +68,22 @@ export default function DatabaseDetail() {
               </li>
             ))}
           </ul>
-          {tables.data?.length === 0 && <p>Tidak ada table.</p>}
+          {tables.data?.length === 0 && <p className={ui.muted}>Tidak ada table.</p>}
         </aside>
 
-        <section>
+        <section className="min-w-0 flex-1">
           {!table ? (
-            <p>Pilih table di sebelah kiri.</p>
+            <p className={ui.muted}>Pilih table di sebelah kiri.</p>
           ) : (
             <>
-              <h2>
+              <h2 className={ui.h2}>
                 {schema}.{table}
               </h2>
-              <div className="tabs">
-                <button className={tab === 'structure' ? 'active' : ''} onClick={() => update({ tab: null })}>
+              <div className="mb-4 flex gap-1 border-b border-neutral-500/30">
+                <button className={tabClass(tab === 'structure')} onClick={() => update({ tab: null })}>
                   Struktur
                 </button>
-                <button className={tab === 'data' ? 'active' : ''} onClick={() => update({ tab: 'data' })}>
+                <button className={tabClass(tab === 'data')} onClick={() => update({ tab: 'data' })}>
                   Data
                 </button>
               </div>
