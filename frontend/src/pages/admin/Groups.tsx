@@ -3,11 +3,13 @@ import type { FormEvent } from 'react'
 import { message, read, write } from '../../api/admin'
 import type { Database, Grant, Group, User } from '../../api/admin'
 import { useAdmin } from '../../components/admin/useAdmin'
-import { PencilIcon, TrashIcon, UsersIcon } from '../../components/icons'
-import { Alert, Card, EmptyState, Field, LevelBadge, Loading, PageHeader } from '../../components/kit'
+import { PencilIcon, TrashIcon } from '../../components/icons'
+import { Alert, Avatar, Empty, Field, LevelPill, Loading, PageHeader, Section } from '../../components/kit'
 import { ui } from '../../components/ui'
+import { useCrumbs } from '../../context/crumbs'
 
 export default function Groups() {
+  useCrumbs([{ label: 'Administrasi' }, { label: 'Groups' }])
   const load = useCallback(async () => {
     const [groups, users, databases] = await Promise.all([
       read<Group[]>('/admin/groups'),
@@ -66,45 +68,50 @@ export default function Groups() {
   }
 
   const group = s.data?.groups.find((g) => g.id === selected)
+  // Open the first group until one is picked, so the members and grants show without a click.
+  if (selected === null && s.data?.groups.length) setSelected(s.data.groups[0].id)
 
   return (
     <>
-      <PageHeader title="Groups" subtitle="Akses database diberikan ke group, lalu berlaku untuk semua anggotanya." />
+      <PageHeader
+        title="Groups"
+        subtitle={s.data && `${s.data.groups.length} group. Akses database diberikan ke group; level tertinggi dari semua group user yang berlaku.`}
+      />
       {s.error && <Alert>{s.error}</Alert>}
-      <div className="grid gap-6 lg:grid-cols-[20rem_minmax(0,1fr)] lg:items-start">
+      <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)] lg:items-start">
         <div className="space-y-6">
-          <Card title={edit === null ? 'Buat group' : 'Edit group'}>
-            <form onSubmit={save} className="space-y-4">
-              <Field label="Nama">
-                <input className={ui.input} required maxLength={64} value={name} onChange={(e) => setName(e.target.value)} />
-              </Field>
-              <Field label="Deskripsi">
-                <input className={ui.input} value={description} onChange={(e) => setDescription(e.target.value)} />
-              </Field>
-              <div className="flex gap-2">
-                <button className={ui.buttonPrimary} disabled={s.busy}>Simpan</button>
-                <button type="button" className={ui.button} onClick={resetForm}>Batal</button>
-              </div>
-            </form>
-          </Card>
+          <form onSubmit={save} className={`${ui.well} space-y-4`}>
+            <h2 className="text-base font-semibold">{edit === null ? 'Buat group' : `Edit ${name || 'group'}`}</h2>
+            <Field label="Nama">
+              <input className={ui.input} required maxLength={64} value={name} onChange={(e) => setName(e.target.value)} />
+            </Field>
+            <Field label="Deskripsi">
+              <input className={ui.input} value={description} onChange={(e) => setDescription(e.target.value)} />
+            </Field>
+            <div className="flex gap-2 pt-1">
+              <button className={ui.buttonPrimary} disabled={s.busy}>Simpan</button>
+              <button type="button" className={ui.button} onClick={resetForm}>Batal</button>
+            </div>
+          </form>
 
-          <Card title="Semua group" flush>
+          <Section title="Semua group" aside={s.data && <span className="num">{s.data.groups.length}</span>}>
             {!s.data ? (
-              <div className="px-4"><Loading /></div>
+              <Loading rows={2} />
             ) : s.data.groups.length === 0 ? (
-              <EmptyState title="Belum ada group" />
+              <Empty>Belum ada group.</Empty>
             ) : (
-              <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+              <ul className="space-y-0.5">
                 {s.data.groups.map((g) => (
-                  <li key={g.id} className={`flex items-center gap-2 px-2 py-1.5 ${g.id === selected ? 'bg-indigo-50/70 dark:bg-indigo-500/10' : ''}`}>
-                    <button className="min-w-0 flex-1 rounded-md px-2 py-1 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800" onClick={() => setSelected(g.id)}>
-                      <span className={`block truncate text-sm font-medium ${g.id === selected ? 'text-indigo-700 dark:text-indigo-300' : ''}`}>{g.name}</span>
-                      {g.description && <span className="block truncate text-xs text-zinc-500 dark:text-zinc-400">{g.description}</span>}
+                  <li key={g.id} className={`flex items-center gap-1 rounded-lg pr-1 ${g.id === selected ? 'bg-active' : 'hover:bg-raised'}`}>
+                    <button className="min-w-0 flex-1 rounded-lg px-2.5 py-2 text-left focus-visible:outline-2 focus-visible:outline-accent" onClick={() => setSelected(g.id)} aria-current={g.id === selected ? 'true' : undefined}>
+                      <span className="block truncate text-sm font-medium">{g.name}</span>
+                      {g.description && <span className="block truncate text-xs text-muted">{g.description}</span>}
                     </button>
                     <button
                       className={ui.buttonSmGhost}
                       disabled={s.busy}
                       aria-label={`Edit ${g.name}`}
+                      title="Edit"
                       onClick={() => {
                         setEdit(g.id)
                         setName(g.name)
@@ -114,9 +121,10 @@ export default function Groups() {
                       <PencilIcon size={14} />
                     </button>
                     <button
-                      className={`${ui.buttonSmGhost} hover:text-red-600 dark:hover:text-red-400`}
+                      className={`${ui.buttonSmGhost} hover:text-negative`}
                       disabled={s.busy}
                       aria-label={`Hapus ${g.name}`}
+                      title="Hapus"
                       onClick={() => {
                         if (confirm(`Hapus group ${g.name} beserta membership dan grant?`))
                           void s.act(async () => {
@@ -131,26 +139,22 @@ export default function Groups() {
                 ))}
               </ul>
             )}
-          </Card>
+          </Section>
         </div>
 
         {selected === null || !s.data ? (
-          <div className={ui.card}>
-            <EmptyState icon={<UsersIcon size={20} />} title="Pilih group">
-              Pilih group di sebelah kiri untuk mengatur anggota dan grant database.
-            </EmptyState>
-          </div>
+          <Empty>Pilih group di sebelah kiri untuk mengatur anggota dan grant database.</Empty>
         ) : (
-          <div className="space-y-6">
-            <Card title={<>Anggota · {group?.name}</>} description={`${members.length} anggota`} flush>
+          <div className="min-w-0 space-y-10">
+            <Section title={<>Anggota {group?.name}</>} aside={<span className="num">{members.length}</span>}>
               <form
-                className="flex flex-wrap gap-2 border-b border-zinc-200 p-4 dark:border-zinc-800"
+                className="mb-2 flex flex-wrap gap-2"
                 onSubmit={(e) => {
                   e.preventDefault()
                   void change(() => write('PUT', `/admin/groups/${selected}/members/${uid}`))
                 }}
               >
-                <select className={`${ui.select} min-w-48 flex-1`} required value={uid} onChange={(e) => setUid(e.target.value)}>
+                <select className={`${ui.select} min-w-48 flex-1 sm:max-w-80`} required value={uid} onChange={(e) => setUid(e.target.value)} aria-label="User">
                   <option value="">Pilih user</option>
                   {s.data.users
                     .filter((u) => !members.some((m) => m.id === u.id))
@@ -161,15 +165,14 @@ export default function Groups() {
                 <button className={ui.buttonPrimary} disabled={s.busy}>Tambah anggota</button>
               </form>
               {members.length === 0 ? (
-                <p className={`p-4 ${ui.muted}`}>Belum ada anggota.</p>
+                <Empty>Group ini belum punya anggota.</Empty>
               ) : (
-                <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                <ul>
                   {members.map((u) => (
-                    <li key={u.id} className="flex items-center gap-3 px-4 py-2">
-                      <span className="grid size-7 place-items-center rounded-full bg-zinc-100 text-xs font-semibold uppercase dark:bg-zinc-800">
-                        {u.username.slice(0, 1)}
-                      </span>
-                      <span className="flex-1 text-sm">{u.username}</span>
+                    <li key={u.id} className="flex h-12 items-center gap-3 border-t border-rule">
+                      <Avatar id={u.id} name={u.username} />
+                      <span className="flex-1 font-medium">{u.username}</span>
+                      {u.isAdmin && <span className="text-xs text-muted">Platform Admin</span>}
                       <button
                         className={ui.buttonSmDanger}
                         disabled={s.busy}
@@ -181,58 +184,64 @@ export default function Groups() {
                   ))}
                 </ul>
               )}
-            </Card>
+            </Section>
 
-            <Card title="Grant database" description="Level tertinggi dari semua group user yang berlaku." flush>
+            <Section title="Grant database" aside={<span className="num">{grants.length}</span>}>
               <form
-                className="flex flex-wrap gap-2 border-b border-zinc-200 p-4 dark:border-zinc-800"
+                className="mb-2 flex flex-wrap gap-2"
                 onSubmit={(e) => {
                   e.preventDefault()
                   void change(() => write('PUT', `/admin/groups/${selected}/grants/${did}`, { level }))
                 }}
               >
-                <select className={`${ui.select} min-w-48 flex-1`} required value={did} onChange={(e) => setDid(e.target.value)}>
+                <select className={`${ui.select} min-w-48 flex-1 sm:max-w-80`} required value={did} onChange={(e) => setDid(e.target.value)} aria-label="Database">
                   <option value="">Pilih database</option>
                   {s.data.databases.map((d) => (
                     <option key={d.id} value={d.id}>{d.name}</option>
                   ))}
                 </select>
-                <select className={ui.select} value={level} onChange={(e) => setLevel(e.target.value as 'VIEW' | 'EDIT')}>
+                <select className={ui.select} value={level} onChange={(e) => setLevel(e.target.value as 'VIEW' | 'EDIT')} aria-label="Level">
                   <option>VIEW</option>
                   <option>EDIT</option>
                 </select>
                 <button className={ui.buttonPrimary} disabled={s.busy}>Simpan grant</button>
               </form>
               {grants.length === 0 ? (
-                <p className={`p-4 ${ui.muted}`}>Belum ada grant.</p>
+                <Empty>Group ini belum punya grant ke database mana pun.</Empty>
               ) : (
-                <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                  {grants.map((g) => (
-                    <li key={g.databaseId} className="flex items-center gap-3 px-4 py-2">
-                      <span className="flex-1 text-sm font-medium">{s.data?.databases.find((d) => d.id === g.databaseId)?.name}</span>
-                      <LevelBadge level={g.level} />
-                      <button
-                        className={ui.buttonSm}
-                        disabled={s.busy}
-                        onClick={() => {
-                          setDid(String(g.databaseId))
-                          setLevel(g.level)
-                        }}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className={ui.buttonSmDanger}
-                        disabled={s.busy}
-                        onClick={() => void change(() => write('DELETE', `/admin/groups/${selected}/grants/${g.databaseId}`))}
-                      >
-                        Cabut
-                      </button>
-                    </li>
-                  ))}
+                <ul>
+                  {grants.map((g) => {
+                    const d = s.data?.databases.find((x) => x.id === g.databaseId)
+                    return (
+                      <li key={g.databaseId} className="flex h-14 items-center gap-3 border-t border-rule">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium">{d?.name}</p>
+                          {d && <p className={`${ui.ident} truncate text-muted`}>{d.host}:{d.port}/{d.dbName}</p>}
+                        </div>
+                        <LevelPill level={g.level} />
+                        <button
+                          className={ui.buttonSm}
+                          disabled={s.busy}
+                          onClick={() => {
+                            setDid(String(g.databaseId))
+                            setLevel(g.level)
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className={ui.buttonSmDanger}
+                          disabled={s.busy}
+                          onClick={() => void change(() => write('DELETE', `/admin/groups/${selected}/grants/${g.databaseId}`))}
+                        >
+                          Cabut
+                        </button>
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
-            </Card>
+            </Section>
           </div>
         )}
       </div>
