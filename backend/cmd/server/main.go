@@ -15,9 +15,14 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/AthillaZaidan/datanest/backend/internal/admin"
 	"github.com/AthillaZaidan/datanest/backend/internal/auth"
+	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/config"
+	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
+	"github.com/AthillaZaidan/datanest/backend/internal/explorer"
 	"github.com/AthillaZaidan/datanest/backend/internal/httpapi"
+	"github.com/AthillaZaidan/datanest/backend/internal/migration"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
 	"github.com/AthillaZaidan/datanest/backend/internal/session"
 )
@@ -61,9 +66,24 @@ func run() error {
 	defer sessions.Close()
 	authService := &auth.Service{DB: db, Sessions: sessions, CookieSecure: cfg.CookieSecure}
 
+	credentialCipher, err := dbconn.NewCipher(cfg.CredentialsKey)
+	if err != nil {
+		return err
+	}
+	pools := dbconn.NewPools(db, credentialCipher, cfg.Target.QueryTimeout)
+	defer pools.Close()
+	az := authz.New(db)
+	adminService := admin.New(db, sessions)
+	databaseService := dbconn.New(db, credentialCipher, pools, az, cfg.Target.QueryTimeout)
+	explorerService := explorer.New(db, pools, az, cfg.Target.QueryTimeout)
+	migrationService := migration.New(db, pools, az, migration.Options{LockTimeout: cfg.Target.MigrationLockTimeout, StatementTimeout: cfg.Target.MigrationStatementTimeout, ExecTimeout: cfg.Target.MigrationExecTimeout})
+	if err := migrationService.Reconcile(context.Background()); err != nil {
+		return err
+	}
 	srv := &http.Server{
 		Addr: ":" + cfg.AppPort,
 		Handler: httpapi.NewRouter(httpapi.Deps{
+			Admin: adminService, Databases: databaseService, Explorer: explorerService, Migrations: migrationService,
 			Security: auth.ValidateStateRequest(cfg.AllowedOrigin), RequireAuth: authService.RequireAuth,
 			RequireAdmin: authService.RequireAdmin, Login: authService.Login, Logout: authService.Logout, Me: authService.Me,
 		}),

@@ -42,8 +42,8 @@ func TestUnknownActionDenied(t *testing.T) {
 
 func TestCanDeniesOnLookupError(t *testing.T) {
 	ok, err := New(nil).Can(context.Background(), 1, 1, ViewSchema)
-	if ok || !errors.Is(err, ErrNotImplemented) {
-		t.Fatalf("Can = %v, %v; want false, ErrNotImplemented", ok, err)
+	if ok || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Can = %v, %v; want false, ErrUnavailable", ok, err)
 	}
 }
 

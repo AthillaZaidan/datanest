@@ -1,4 +1,16 @@
-// TODO(B): implement.
-export default function Databases() {
-  return <h1>Database Connections</h1>
+import { useCallback, useState } from 'react'
+import type { FormEvent } from 'react'
+import { read, write } from '../../api/admin'
+import type { ConnectionInput, ConnectionTest, Database } from '../../api/admin'
+import { useAdmin, panel } from '../../components/admin/useAdmin'
+const initial:ConnectionInput={name:'',host:'localhost',port:15433,dbName:'',username:'platform_app',password:'',sslMode:'disable'}
+export default function Databases(){
+ const load=useCallback(()=>read<Database[]>('/admin/databases'),[]),s=useAdmin(load)
+ const [id,setId]=useState<number|null>(null),[form,setForm]=useState<ConnectionInput>({...initial}),[result,setResult]=useState<ConnectionTest|null>(null)
+ function reset(){setId(null);setForm({...initial});setResult(null)}
+ function field(k:keyof ConnectionInput,v:string){setForm(f=>({...f,[k]:k==='port'?Number(v):v}));setResult(null)}
+ async function save(e:FormEvent){e.preventDefault();if(await s.act(()=>write(id===null?'POST':'PATCH',id===null?'/admin/databases':`/admin/databases/${id}`,form)))reset()}
+ async function test(saved?:number){setResult(null);await s.act(async()=>{const v=await write<ConnectionTest>('POST',saved?`/admin/databases/${saved}/test`:'/admin/databases/test',saved?undefined:form);setResult(v)})}
+ return <section><h1>Koneksi database</h1>{s.error&&<p role="alert">{s.error}</p>}{result&&<p role="status">Koneksi berhasil. {result.warning}</p>}<form style={panel} onSubmit={save}><h2>{id===null?'Tambah koneksi':'Edit koneksi'}</h2>{(['name','host','port','dbName','username','password'] as const).map(k=><label key={k} style={{display:'block',marginBottom:8}}>{k==='password'&&id!==null?'Password (kosong = tetap)':k} <input type={k==='password'?'password':k==='port'?'number':'text'} required={k!=='password'} autoComplete={k==='password'?'new-password':'off'} min={k==='port'?1:undefined} max={k==='port'?65535:undefined} value={form[k]} onChange={e=>field(k,e.target.value)}/></label>)}<label>SSL mode <select value={form.sslMode} onChange={e=>field('sslMode',e.target.value)}>{['disable','allow','prefer','require','verify-ca','verify-full'].map(v=><option key={v}>{v}</option>)}</select></label><p>Password tersimpan tidak ditampilkan. Test form memakai password yang diisi; untuk kredensial tersimpan gunakan tombol Test pada daftar.</p><button disabled={s.busy}>Simpan</button> <button type="button" disabled={s.busy} onClick={()=>void test()}>Test form</button> <button type="button" onClick={reset}>Batal</button></form>
+ {!s.data?<p>Memuat...</p>:<table><thead><tr><th>Nama</th><th>Target</th><th>User</th><th>Password</th><th>Aksi</th></tr></thead><tbody>{s.data.map(d=><tr key={d.id}><td>{d.name}</td><td>{d.host}:{d.port}/{d.dbName}</td><td>{d.username}</td><td>{d.hasPassword?'Tersimpan':'Tidak ada'}</td><td><button disabled={s.busy} onClick={()=>{setId(d.id);setResult(null);setForm({name:d.name,host:d.host,port:d.port,dbName:d.dbName,username:d.username,password:'',sslMode:d.sslMode})}}>Edit</button> <button disabled={s.busy} onClick={()=>void test(d.id)}>Test</button> <button disabled={s.busy} onClick={()=>{if(confirm(`Hapus ${d.name}? Grant dan seluruh riwayat migration ikut dihapus.`))void s.act(()=>write('DELETE',`/admin/databases/${d.id}`))}}>Hapus</button></td></tr>)}</tbody></table>}</section>
 }

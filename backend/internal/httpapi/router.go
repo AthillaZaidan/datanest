@@ -2,6 +2,8 @@
 package httpapi
 
 import (
+	"github.com/AthillaZaidan/datanest/backend/internal/admin"
+	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
 	"log"
 	"net/http"
 
@@ -15,6 +17,8 @@ import (
 // Deps are what the router needs. Nil middlewares fail closed and nil services leave
 // their routes at 501.
 type Deps struct {
+	Admin        *admin.Service
+	Databases    *dbconn.Service
 	Security     gin.HandlerFunc
 	RequireAuth  gin.HandlerFunc
 	RequireAdmin gin.HandlerFunc
@@ -43,6 +47,20 @@ func NewRouter(d Deps) *gin.Engine {
 			h.get, h.update, h.delete, h.execute, h.duplicate
 	}
 
+	ah := adminHandlers{svc: d.Admin}
+	dh := databaseHandlers{svc: d.Databases}
+	adminHandler := func(h gin.HandlerFunc) gin.HandlerFunc {
+		if d.Admin == nil {
+			return notImplemented
+		}
+		return h
+	}
+	databaseHandler := func(h gin.HandlerFunc) gin.HandlerFunc {
+		if d.Databases == nil {
+			return notImplemented
+		}
+		return h
+	}
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(RequestLogger(log.Default()))
@@ -59,37 +77,37 @@ func NewRouter(d Deps) *gin.Engine {
 	auth.GET("/me", requireAuth, orNotImplemented(d.Me))
 
 	admin := api.Group("/admin", requireAuth, requireAdmin)
-	admin.GET("/users", notImplemented)
-	admin.POST("/users", notImplemented)
-	admin.GET("/users/:userId", notImplemented)
-	admin.PATCH("/users/:userId", notImplemented)
-	admin.DELETE("/users/:userId", notImplemented)
-	admin.PUT("/users/:userId/roles/:role", notImplemented)
-	admin.DELETE("/users/:userId/roles/:role", notImplemented)
+	admin.GET("/users", adminHandler(ah.users))
+	admin.POST("/users", adminHandler(ah.createUser))
+	admin.GET("/users/:userId", adminHandler(ah.user))
+	admin.PATCH("/users/:userId", adminHandler(ah.updateUser))
+	admin.DELETE("/users/:userId", adminHandler(ah.deleteUser))
+	admin.PUT("/users/:userId/roles/:role", adminHandler(ah.role))
+	admin.DELETE("/users/:userId/roles/:role", adminHandler(ah.role))
 
-	admin.GET("/groups", notImplemented)
-	admin.POST("/groups", notImplemented)
-	admin.GET("/groups/:groupId", notImplemented)
-	admin.PATCH("/groups/:groupId", notImplemented)
-	admin.DELETE("/groups/:groupId", notImplemented)
-	admin.GET("/groups/:groupId/members", notImplemented)
-	admin.PUT("/groups/:groupId/members/:userId", notImplemented)
-	admin.DELETE("/groups/:groupId/members/:userId", notImplemented)
-	admin.GET("/groups/:groupId/grants", notImplemented)
-	admin.PUT("/groups/:groupId/grants/:databaseId", notImplemented)
-	admin.DELETE("/groups/:groupId/grants/:databaseId", notImplemented)
+	admin.GET("/groups", adminHandler(ah.groups))
+	admin.POST("/groups", adminHandler(ah.createGroup))
+	admin.GET("/groups/:groupId", adminHandler(ah.group))
+	admin.PATCH("/groups/:groupId", adminHandler(ah.updateGroup))
+	admin.DELETE("/groups/:groupId", adminHandler(ah.deleteGroup))
+	admin.GET("/groups/:groupId/members", adminHandler(ah.members))
+	admin.PUT("/groups/:groupId/members/:userId", adminHandler(ah.member))
+	admin.DELETE("/groups/:groupId/members/:userId", adminHandler(ah.member))
+	admin.GET("/groups/:groupId/grants", adminHandler(ah.grants))
+	admin.PUT("/groups/:groupId/grants/:databaseId", adminHandler(ah.grant))
+	admin.DELETE("/groups/:groupId/grants/:databaseId", adminHandler(ah.grant))
 
-	admin.GET("/databases", notImplemented)
-	admin.POST("/databases", notImplemented)
-	admin.POST("/databases/test", notImplemented)
-	admin.GET("/databases/:databaseId", notImplemented)
-	admin.PATCH("/databases/:databaseId", notImplemented)
-	admin.DELETE("/databases/:databaseId", notImplemented)
-	admin.POST("/databases/:databaseId/test", notImplemented)
+	admin.GET("/databases", databaseHandler(dh.list))
+	admin.POST("/databases", databaseHandler(dh.create))
+	admin.POST("/databases/test", databaseHandler(dh.test))
+	admin.GET("/databases/:databaseId", databaseHandler(dh.get))
+	admin.PATCH("/databases/:databaseId", databaseHandler(dh.update))
+	admin.DELETE("/databases/:databaseId", databaseHandler(dh.delete))
+	admin.POST("/databases/:databaseId/test", databaseHandler(dh.testSaved))
 
 	user := api.Group("", requireAuth)
-	user.GET("/databases", notImplemented)
-	user.GET("/databases/:databaseId", notImplemented)
+	user.GET("/databases", databaseHandler(dh.listForUser))
+	user.GET("/databases/:databaseId", databaseHandler(dh.getForUser))
 	user.GET("/databases/:databaseId/schemas", listSchemas)
 	user.GET("/databases/:databaseId/schemas/:schema/tables", listTables)
 	user.GET("/databases/:databaseId/schemas/:schema/tables/:table", getTable)
