@@ -28,3 +28,14 @@ cd frontend && bun install && bun run dev   # http://localhost:5173, /api proxie
 cd backend && go test -race ./...                                   # unit tests
 cd backend && set -a && . ../.env && set +a && go test -race -tags=integration -p 1 ./...   # + integration (needs test-pg)
 ```
+
+## Session dan keamanan request
+
+Session disimpan hanya di memori server: restart server mengeluarkan seluruh pengguna dan deployment harus single-instance. Identifier session berupa 32 byte acak, dikirim hanya melalui cookie `sid` dengan `HttpOnly`, `SameSite=Strict`, `Path=/`, dan `Secure` saat `COOKIE_SECURE=true`. Server hanya menyimpan hash SHA-256 identifier.
+
+- Idle timeout: 30 menit, sesuai rentang OWASP untuk aplikasi berisiko rendah.
+- Absolute timeout: 8 jam, satu hari kerja dan tidak diperpanjang oleh rotasi.
+- Rotasi: setiap 15 menit atau ketika hak pengguna naik.
+- Grace period: 30 detik agar request yang berjalan saat rotasi tetap valid.
+
+Setiap request pengubah state memerlukan `X-CSRF-Token` synchronizer token, JSON, serta `Origin` yang sesuai `ALLOWED_ORIGIN`. Token disimpan di memori frontend dan dikirim oleh API client. Login menggunakan bcrypt; password, token CSRF, serta session identifier tidak dicatat atau dikirim dalam response body. Platform Admin tidak otomatis mendapat akses database target—akses target tetap berasal dari grant group.
