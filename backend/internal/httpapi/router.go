@@ -7,17 +7,36 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
+	"github.com/AthillaZaidan/datanest/backend/internal/explorer"
+	"github.com/AthillaZaidan/datanest/backend/internal/migration"
 )
 
-// Deps are the middlewares and handlers the router needs. Nil middlewares fail closed (501).
+// Deps are what the router needs. Nil middlewares fail closed and nil services leave
+// their routes at 501.
 type Deps struct {
 	RequireAuth  gin.HandlerFunc
 	RequireAdmin gin.HandlerFunc
+	Explorer     *explorer.Service
+	Migrations   *migration.Service
 }
 
 func NewRouter(d Deps) *gin.Engine {
 	requireAuth := orNotImplemented(d.RequireAuth)
 	requireAdmin := orNotImplemented(d.RequireAdmin)
+
+	listSchemas, listTables, getTable, getRows := notImplemented, notImplemented, notImplemented, notImplemented
+	if d.Explorer != nil {
+		h := explorerHandlers{svc: d.Explorer}
+		listSchemas, listTables, getTable, getRows = h.listSchemas, h.listTables, h.getTable, h.getRows
+	}
+
+	listMig, createMig, getMig, updateMig, deleteMig, executeMig, duplicateMig := notImplemented,
+		notImplemented, notImplemented, notImplemented, notImplemented, notImplemented, notImplemented
+	if d.Migrations != nil {
+		h := migrationHandlers{svc: d.Migrations}
+		listMig, createMig, getMig, updateMig, deleteMig, executeMig, duplicateMig = h.list, h.create,
+			h.get, h.update, h.delete, h.execute, h.duplicate
+	}
 
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -62,18 +81,18 @@ func NewRouter(d Deps) *gin.Engine {
 	user := api.Group("", requireAuth)
 	user.GET("/databases", notImplemented)
 	user.GET("/databases/:databaseId", notImplemented)
-	user.GET("/databases/:databaseId/schemas", notImplemented)
-	user.GET("/databases/:databaseId/schemas/:schema/tables", notImplemented)
-	user.GET("/databases/:databaseId/schemas/:schema/tables/:table", notImplemented)
-	user.GET("/databases/:databaseId/schemas/:schema/tables/:table/rows", notImplemented)
-	user.GET("/databases/:databaseId/migrations", notImplemented)
-	user.POST("/databases/:databaseId/migrations", notImplemented)
+	user.GET("/databases/:databaseId/schemas", listSchemas)
+	user.GET("/databases/:databaseId/schemas/:schema/tables", listTables)
+	user.GET("/databases/:databaseId/schemas/:schema/tables/:table", getTable)
+	user.GET("/databases/:databaseId/schemas/:schema/tables/:table/rows", getRows)
+	user.GET("/databases/:databaseId/migrations", listMig)
+	user.POST("/databases/:databaseId/migrations", createMig)
 
-	user.GET("/migrations/:migrationId", notImplemented)
-	user.PATCH("/migrations/:migrationId", notImplemented)
-	user.DELETE("/migrations/:migrationId", notImplemented)
-	user.POST("/migrations/:migrationId/execute", notImplemented)
-	user.POST("/migrations/:migrationId/duplicate", notImplemented)
+	user.GET("/migrations/:migrationId", getMig)
+	user.PATCH("/migrations/:migrationId", updateMig)
+	user.DELETE("/migrations/:migrationId", deleteMig)
+	user.POST("/migrations/:migrationId/execute", executeMig)
+	user.POST("/migrations/:migrationId/duplicate", duplicateMig)
 
 	return r
 }
