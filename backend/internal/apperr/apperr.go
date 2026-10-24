@@ -51,6 +51,7 @@ var (
 	ErrNotFound                     = New(http.StatusNotFound, "NOT_FOUND", "Resource tidak ditemukan.")
 	ErrUsernameTaken                = New(http.StatusConflict, "USERNAME_TAKEN", "Username sudah dipakai.")
 	ErrConflict                     = New(http.StatusConflict, "CONFLICT", "Data bentrok dengan data yang sudah ada.")
+	ErrLastAdmin                    = New(http.StatusConflict, "LAST_ADMIN", "Harus selalu ada minimal satu Platform Admin.")
 	ErrMigrationRunning             = New(http.StatusConflict, "MIGRATION_RUNNING", "Sedang ada migration yang berjalan di database ini.")
 	ErrMigrationNotDraft            = New(http.StatusConflict, "MIGRATION_NOT_DRAFT", "Migration ini bukan draft.")
 	ErrRevisionConflict             = New(http.StatusConflict, "REVISION_CONFLICT", "Draft telah diubah oleh pengguna lain. Muat ulang untuk melihat perubahan terbaru.")
