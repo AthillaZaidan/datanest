@@ -1,13 +1,14 @@
 import { Link } from 'react-router'
-import { EmptyState } from '../components/kit'
+import { Empty, PageHeader } from '../components/kit'
 import { ui } from '../components/ui'
+import { useCrumbs } from '../context/crumbs'
 
 export default function NotFound() {
+  useCrumbs([{ label: 'Tidak ditemukan' }])
   return (
-    <div className={ui.card}>
-      <EmptyState title="Halaman tidak ditemukan">
-        <Link className={ui.link} to="/databases">Kembali ke Database saya</Link>
-      </EmptyState>
-    </div>
+    <>
+      <PageHeader title="Halaman tidak ditemukan" subtitle="Alamat ini tidak ada atau sudah dipindahkan." />
+      <Empty action={<Link className={ui.button} to="/databases">Ke Databases</Link>}>Kembali ke daftar database yang dapat Anda akses.</Empty>
+    </>
   )
 }
