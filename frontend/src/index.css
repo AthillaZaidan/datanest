@@ -3,3 +3,31 @@
 :root {
   color-scheme: light dark;
 }
+
+.toolbar {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 0.75rem;
+  font-size: 0.85em;
+  color: #fff;
+  background: #757575;
+}
+
+.badge-success {
+  background: #2e7d32;
+}
+
+.badge-failed {
+  background: #c62828;
+}
+
+.badge-running {
+  background: #ef6c00;
+}
