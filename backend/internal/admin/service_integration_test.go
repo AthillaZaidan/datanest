@@ -105,3 +105,23 @@ func TestAdminLifecycle(t *testing.T) {
 		t.Fatal("access remains", e)
 	}
 }
+
+func TestLastAdminIsKept(t *testing.T) {
+	db := testutil.PlatformDB(t)
+	ctx := context.Background()
+	a := testutil.CreateAdmin(t, db, "admin")
+	s := admin.New(db, &sessions{map[uint]int{}, map[uint]int{}})
+	if e := s.Role(ctx, a.ID, a.ID, models.RolePlatformAdmin, false); !errors.Is(e, apperr.ErrLastAdmin) {
+		t.Fatalf("demote last admin: %v", e)
+	}
+	if e := s.DeleteUser(ctx, a.ID, a.ID); !errors.Is(e, apperr.ErrLastAdmin) {
+		t.Fatalf("delete last admin: %v", e)
+	}
+	b := testutil.CreateAdmin(t, db, "second")
+	if e := s.Role(ctx, a.ID, a.ID, models.RolePlatformAdmin, false); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.DeleteUser(ctx, b.ID, b.ID); !errors.Is(e, apperr.ErrLastAdmin) {
+		t.Fatalf("delete remaining admin: %v", e)
+	}
+}

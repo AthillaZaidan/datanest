@@ -6,6 +6,7 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Repository struct{ DB *gorm.DB }
@@ -43,4 +44,19 @@ func memberIDs(tx *gorm.DB, gid uint) ([]uint, error) {
 	var ids []uint
 	e := tx.Model(&models.GroupMember{}).Where("group_id = ?", gid).Pluck("user_id", &ids).Error
 	return ids, e
+}
+
+// keepAnAdmin locks the admin role rows so concurrent demotions cannot remove the last admin.
+func keepAnAdmin(tx *gorm.DB, userID uint) error {
+	var ids []uint
+	e := tx.Model(&models.UserRole{}).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Joins("JOIN roles ON roles.id = user_roles.role_id").Where("roles.name = ?", models.RolePlatformAdmin).
+		Pluck("user_roles.user_id", &ids).Error
+	if e != nil {
+		return e
+	}
+	if len(ids) == 1 && ids[0] == userID {
+		return apperr.ErrLastAdmin
+	}
+	return nil
 }

@@ -140,12 +140,21 @@ func (s *Service) DeleteUser(ctx context.Context, a, id uint) error {
 	if e := s.require(ctx, a); e != nil {
 		return e
 	}
-	res := s.repo.DB.WithContext(ctx).Delete(&models.User{}, id)
-	if res.Error != nil {
-		return mapped(res.Error, false)
-	}
-	if res.RowsAffected == 0 {
-		return apperr.ErrNotFound
+	e := s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if e := keepAnAdmin(tx, id); e != nil {
+			return e
+		}
+		res := tx.Delete(&models.User{}, id)
+		if res.Error != nil {
+			return mapped(res.Error, false)
+		}
+		if res.RowsAffected == 0 {
+			return apperr.ErrNotFound
+		}
+		return nil
+	})
+	if e != nil {
+		return e
 	}
 	s.sessions.RevokeAllForUser(id)
 	return nil
@@ -171,6 +180,9 @@ func (s *Service) Role(ctx context.Context, a, id uint, role string, add bool) e
 			res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&ur)
 			changed = res.RowsAffected > 0
 			return res.Error
+		}
+		if e := keepAnAdmin(tx, id); e != nil {
+			return e
 		}
 		return tx.Where("user_id = ? AND role_id = ?", id, r.ID).Delete(&models.UserRole{}).Error
 	})
