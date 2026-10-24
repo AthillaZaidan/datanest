@@ -10,8 +10,9 @@ import AdminGroups from './pages/admin/Groups'
 import AdminDatabases from './pages/admin/Databases'
 import NotFound from './pages/NotFound'
 import { useAuth } from './context/AuthContext'
+import { Loading } from './components/kit'
 
-function ProtectedRoute() { const { user, loading } = useAuth(); if (loading) return <p>Memuat sesi…</p>; return user ? <Outlet /> : <Navigate to="/login" replace /> }
+function ProtectedRoute() { const { user, loading } = useAuth(); if (loading) return <div className="grid min-h-screen place-items-center"><Loading label="Memuat sesi…" /></div>; return user ? <Outlet /> : <Navigate to="/login" replace /> }
 function AdminRoute() { const { user } = useAuth(); return user?.isAdmin ? <Outlet /> : <Navigate to="/databases" replace /> }
 export default function App() {
   return (
