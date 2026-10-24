@@ -1,4 +1,4 @@
-import { getJSON, request } from './http'
+import { api, send } from './client'
 
 export type MigrationStatus = 'draft' | 'running' | 'success' | 'failed'
 
@@ -28,29 +28,29 @@ const enc = encodeURIComponent
 
 export function listMigrations(databaseId: string, status = '') {
   const q = status ? `?status=${enc(status)}` : ''
-  return getJSON<MigrationList>(`/api/databases/${enc(databaseId)}/migrations${q}`)
+  return api<MigrationList>(`/databases/${enc(databaseId)}/migrations${q}`)
 }
 
 export function createMigration(databaseId: string, sql: string) {
-  return request<Migration>('POST', `/api/databases/${enc(databaseId)}/migrations`, { sql })
+  return send<Migration>('POST', `/databases/${enc(databaseId)}/migrations`, { sql })
 }
 
 export function getMigration(id: string) {
-  return getJSON<Migration>(`/api/migrations/${enc(id)}`)
+  return api<Migration>(`/migrations/${enc(id)}`)
 }
 
 export function updateMigration(id: string, sql: string, revision: number) {
-  return request<Migration>('PATCH', `/api/migrations/${enc(id)}`, { sql, revision })
+  return send<Migration>('PATCH', `/migrations/${enc(id)}`, { sql, revision })
 }
 
 export function deleteMigration(id: string) {
-  return request<void>('DELETE', `/api/migrations/${enc(id)}`)
+  return send<void>('DELETE', `/migrations/${enc(id)}`)
 }
 
 export function executeMigration(id: string) {
-  return request<Migration>('POST', `/api/migrations/${enc(id)}/execute`)
+  return send<Migration>('POST', `/migrations/${enc(id)}/execute`)
 }
 
 export function duplicateMigration(id: string) {
-  return request<Migration>('POST', `/api/migrations/${enc(id)}/duplicate`)
+  return send<Migration>('POST', `/migrations/${enc(id)}/duplicate`)
 }

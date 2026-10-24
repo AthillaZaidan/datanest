@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import { ApiError } from '../api/http'
+import { ApiError } from '../api/client'
 import {
   type Migration,
   createMigration,

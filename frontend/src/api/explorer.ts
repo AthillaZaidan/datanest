@@ -1,4 +1,4 @@
-import { getJSON } from './http'
+import { api } from './client'
 
 export type Schema = { name: string }
 export type Table = { name: string }
@@ -44,22 +44,22 @@ export type Rows = {
 export const PAGE_SIZES = [10, 25, 50, 100]
 
 const enc = encodeURIComponent
-const base = (databaseId: string) => `/api/databases/${enc(databaseId)}`
+const base = (databaseId: string) => `/databases/${enc(databaseId)}`
 
 export async function listSchemas(databaseId: string) {
-  return (await getJSON<{ schemas: Schema[] }>(`${base(databaseId)}/schemas`)).schemas
+  return (await api<{ schemas: Schema[] }>(`${base(databaseId)}/schemas`)).schemas
 }
 
 export async function listTables(databaseId: string, schema: string) {
-  return (await getJSON<{ tables: Table[] }>(`${base(databaseId)}/schemas/${enc(schema)}/tables`)).tables
+  return (await api<{ tables: Table[] }>(`${base(databaseId)}/schemas/${enc(schema)}/tables`)).tables
 }
 
 export function getTable(databaseId: string, schema: string, table: string) {
-  return getJSON<TableDetail>(`${base(databaseId)}/schemas/${enc(schema)}/tables/${enc(table)}`)
+  return api<TableDetail>(`${base(databaseId)}/schemas/${enc(schema)}/tables/${enc(table)}`)
 }
 
 export function getRows(databaseId: string, schema: string, table: string, page: number, pageSize: number) {
-  return getJSON<Rows>(
+  return api<Rows>(
     `${base(databaseId)}/schemas/${enc(schema)}/tables/${enc(table)}/rows?page=${page}&pageSize=${pageSize}`,
   )
 }
