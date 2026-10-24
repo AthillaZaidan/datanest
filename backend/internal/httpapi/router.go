@@ -7,17 +7,26 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
+	"github.com/AthillaZaidan/datanest/backend/internal/explorer"
 )
 
-// Deps are the middlewares and handlers the router needs. Nil middlewares fail closed (501).
+// Deps are what the router needs. Nil middlewares fail closed and nil services leave
+// their routes at 501.
 type Deps struct {
 	RequireAuth  gin.HandlerFunc
 	RequireAdmin gin.HandlerFunc
+	Explorer     *explorer.Service
 }
 
 func NewRouter(d Deps) *gin.Engine {
 	requireAuth := orNotImplemented(d.RequireAuth)
 	requireAdmin := orNotImplemented(d.RequireAdmin)
+
+	listSchemas, listTables, getTable, getRows := notImplemented, notImplemented, notImplemented, notImplemented
+	if d.Explorer != nil {
+		h := explorerHandlers{svc: d.Explorer}
+		listSchemas, listTables, getTable, getRows = h.listSchemas, h.listTables, h.getTable, h.getRows
+	}
 
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -62,10 +71,10 @@ func NewRouter(d Deps) *gin.Engine {
 	user := api.Group("", requireAuth)
 	user.GET("/databases", notImplemented)
 	user.GET("/databases/:databaseId", notImplemented)
-	user.GET("/databases/:databaseId/schemas", notImplemented)
-	user.GET("/databases/:databaseId/schemas/:schema/tables", notImplemented)
-	user.GET("/databases/:databaseId/schemas/:schema/tables/:table", notImplemented)
-	user.GET("/databases/:databaseId/schemas/:schema/tables/:table/rows", notImplemented)
+	user.GET("/databases/:databaseId/schemas", listSchemas)
+	user.GET("/databases/:databaseId/schemas/:schema/tables", listTables)
+	user.GET("/databases/:databaseId/schemas/:schema/tables/:table", getTable)
+	user.GET("/databases/:databaseId/schemas/:schema/tables/:table/rows", getRows)
 	user.GET("/databases/:databaseId/migrations", notImplemented)
 	user.POST("/databases/:databaseId/migrations", notImplemented)
 
