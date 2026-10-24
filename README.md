@@ -22,6 +22,24 @@ cd backend && go run ./cmd/server     # http://localhost:8080
 cd frontend && bun install && bun run dev   # http://localhost:5173, /api proxied to the backend
 ```
 
+## Demo accounts
+
+For a local demo, seed fixed accounts, the two target databases and their grants (safe to run again; it resets the demo passwords):
+
+```bash
+cd backend && go run ./cmd/seed
+```
+
+| Username | Password | Access |
+| --- | --- | --- |
+| `demo-admin` | `demoadmin123` | Platform Admin; no group, so no database access by itself |
+| `developer` | `developer123` | Tim Developer: EDIT `toko`, VIEW `kampus` |
+| `reviewer` | `reviewer123` | Tim Reviewer: VIEW `toko` and `kampus` |
+
+In development (`bun run dev`) the login page lists these accounts and fills the form on click. The list lives in
+`frontend/src/dev/demoAccounts.ts` behind `import.meta.env.DEV`, so production builds leave it out. Never run the seed
+against a real platform database.
+
 ## Conventions
 
 - Frontend uses Bun (`bun add`, `bun run ...`), not npm.
