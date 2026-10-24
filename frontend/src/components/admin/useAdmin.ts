@@ -1,10 +1,38 @@
-import { api } from '../../api/client'
-export type User = { id: number; username: string; isAdmin: boolean }
-export type Group = { id: number; name: string; description: string }
-export type Grant = { groupId: number; databaseId: number; level: 'VIEW' | 'EDIT' }
-export type Database = { id: number; name: string; host: string; port: number; dbName: string; username: string; sslMode: string; hasPassword: boolean; myLevel?: 'VIEW' | 'EDIT'; currentVersion: number }
-export type ConnectionInput = { name: string; host: string; port: number; dbName: string; username: string; password: string; sslMode: string }
-export type ConnectionTest = { ok: boolean; isSuperuser: boolean; warning?: string }
-export const read = <T,>(path: string) => api<T>(path)
-export const write = <T,>(method: string, path: string, value?: unknown) => api<T>(path, { method, ...(value === undefined ? {} : { body: JSON.stringify(value) }) })
-export function message(e: unknown): string { return typeof e === 'object' && e !== null && 'message' in e ? String(e.message) : 'Request gagal. Coba lagi.' }
+import { useCallback, useEffect, useState } from 'react'
+import type { CSSProperties } from 'react'
+import { message } from '../../api/admin'
+
+export const panel: CSSProperties = { border: '1px solid #8884', borderRadius: 6, padding: 12, margin: '12px 0' }
+
+// Loads data on mount; act runs a mutation, reloads on success, and reports whether it succeeded.
+export function useAdmin<T>(load: () => Promise<T>) {
+  const [data, setData] = useState<T | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const refresh = useCallback(async () => {
+    try {
+      setData(await load())
+      setError('')
+    } catch (e) {
+      setError(message(e))
+    }
+  }, [load])
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+  const act = useCallback(async (fn: () => Promise<unknown>) => {
+    setBusy(true)
+    setError('')
+    try {
+      await fn()
+      await refresh()
+      return true
+    } catch (e) {
+      setError(message(e))
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }, [refresh])
+  return { data, error, busy, refresh, act, setError }
+}
