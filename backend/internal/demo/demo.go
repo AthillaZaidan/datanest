@@ -43,7 +43,7 @@ var groups = []group{
 	{"Tim Reviewer", "Meninjau schema dan data.", []string{"reviewer"}, map[string]authz.Level{"toko": authz.View, "kampus": authz.View}},
 }
 
-// Seed is idempotent: it creates what is missing and resets demo passwords and grant levels to the values above.
+// Seed is idempotent: it creates what is missing and resets demo passwords, connection passwords and grant levels.
 // demo-admin joins no group, so it shows that a Platform Admin has no database access by itself.
 func Seed(db *gorm.DB, cipher *dbconn.Cipher) error {
 	return db.Transaction(func(tx *gorm.DB) error {
@@ -78,8 +78,11 @@ func Seed(db *gorm.DB, cipher *dbconn.Cipher) error {
 			if err != nil {
 				return err
 			}
-			c.PasswordEnc = enc
-			if err := tx.Where(models.DatabaseConnection{Name: c.Name}).FirstOrCreate(&c).Error; err != nil {
+			if err := tx.Where(models.DatabaseConnection{Name: c.Name}).Attrs(models.DatabaseConnection{PasswordEnc: enc}).FirstOrCreate(&c).Error; err != nil {
+				return err
+			}
+			// Re-encrypt every run so the demo survives a changed CREDENTIALS_KEY.
+			if err := tx.Model(&c).Update("password_enc", enc).Error; err != nil {
 				return err
 			}
 			databases[c.Name] = c.ID
