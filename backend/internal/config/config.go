@@ -1,4 +1,4 @@
-// Package config loads and validates the server configuration from environment variables.
+// Package config loads the server configuration from the environment.
 package config
 
 import (
@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// Config is the full server configuration.
 type Config struct {
 	AppPort       string
 	AllowedOrigin string
@@ -18,18 +17,18 @@ type Config struct {
 
 	PlatformDSN string
 
-	// AdminUsername and AdminPassword seed the first Platform Admin when none exists.
+	// Seed the first Platform Admin when none exists.
 	AdminUsername string
 	AdminPassword string
 
-	// CredentialsKey is the 32-byte AES-256 key for target DB passwords.
+	// AES-256 key for target DB passwords.
 	CredentialsKey []byte
 
 	Session SessionConfig
 	Target  TargetConfig
 }
 
-// SessionConfig holds session lifetimes. Invariant: grace < rotation < idle < absolute.
+// Invariant: grace < rotation < idle < absolute.
 type SessionConfig struct {
 	IdleTimeout      time.Duration
 	AbsoluteTimeout  time.Duration
@@ -38,7 +37,6 @@ type SessionConfig struct {
 	CleanupInterval  time.Duration
 }
 
-// TargetConfig holds timeouts for work against target databases.
 type TargetConfig struct {
 	QueryTimeout              time.Duration
 	MigrationLockTimeout      time.Duration
@@ -46,12 +44,11 @@ type TargetConfig struct {
 	MigrationExecTimeout      time.Duration
 }
 
-// Load reads the configuration from the process environment.
 func Load() (*Config, error) {
 	return FromLookup(os.LookupEnv)
 }
 
-// FromLookup reads the configuration using lookup, so tests can supply their own environment.
+// FromLookup lets tests supply their own environment.
 func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 	r := reader{lookup: lookup}
 
@@ -142,7 +139,6 @@ func (r *reader) credentialsKey(key string) []byte {
 	}
 	b, err := base64.StdEncoding.DecodeString(v)
 	if err != nil || len(b) != 32 {
-		// The key itself is never echoed back.
 		r.fail("%s must be 32 bytes encoded as base64", key)
 		return nil
 	}

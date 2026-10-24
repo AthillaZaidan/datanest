@@ -1,8 +1,4 @@
-// Package authz is the single place that decides who may do what on a target database
-// (the Policy Decision Point). Other packages only call Can; they never compare levels themselves.
-//
-// Effective access = the highest level among all of the user's groups that have a grant on the
-// database. No grant means no access (deny by default). Platform Admin gives no database access.
+// Package authz decides who may do what on a target database. Other packages only call Can.
 package authz
 
 import (
@@ -13,7 +9,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// Level is an access level on a database. Stored as an integer so that MAX() orders correctly.
+// Level is stored as an integer so MAX() orders correctly.
 type Level int16
 
 const (
@@ -34,10 +30,8 @@ func (l Level) String() string {
 	return fmt.Sprintf("Level(%d)", int16(l))
 }
 
-// MarshalText makes levels appear as "VIEW" / "EDIT" in JSON.
 func (l Level) MarshalText() ([]byte, error) { return []byte(l.String()), nil }
 
-// UnmarshalText accepts only grantable levels ("VIEW", "EDIT").
 func (l *Level) UnmarshalText(b []byte) error {
 	v, err := ParseLevel(string(b))
 	if err != nil {
@@ -47,7 +41,7 @@ func (l *Level) UnmarshalText(b []byte) error {
 	return nil
 }
 
-// ParseLevel parses a grantable level. NONE is not grantable: revoking is deleting the grant.
+// ParseLevel accepts only grantable levels; NONE is expressed by deleting the grant.
 func ParseLevel(s string) (Level, error) {
 	switch s {
 	case "VIEW":
@@ -58,7 +52,6 @@ func ParseLevel(s string) (Level, error) {
 	return None, fmt.Errorf("authz: invalid level %q (want VIEW or EDIT)", s)
 }
 
-// Action is something a user can do on a target database.
 type Action string
 
 const (
@@ -85,16 +78,13 @@ var required = map[Action]Level{
 	ExecuteMigration:   Edit,
 }
 
-// RequiredLevel returns the minimum level for action; ok is false for unknown actions.
 func RequiredLevel(action Action) (level Level, ok bool) {
 	level, ok = required[action]
 	return level, ok
 }
 
-// ErrNotImplemented is returned until EffectiveLevel is implemented.
 var ErrNotImplemented = errors.New("authz: EffectiveLevel not implemented")
 
-// Service answers access questions from the platform database.
 type Service struct {
 	db *gorm.DB
 }
@@ -103,16 +93,13 @@ func New(db *gorm.DB) *Service {
 	return &Service{db: db}
 }
 
-// EffectiveLevel returns the highest level the user holds on the database through any group,
-// or None when no group of the user has a grant on it.
-//
-// TODO(B): SELECT MAX(grants.level) FROM grants JOIN group_members ... (PRD §9).
+// EffectiveLevel is the highest level among the user's groups; None without a grant.
+// TODO(B): implement (PRD §9).
 func (s *Service) EffectiveLevel(ctx context.Context, userID, databaseID uint) (Level, error) {
 	return None, ErrNotImplemented
 }
 
-// Can reports whether the user may perform action on the database.
-// Unknown actions and lookup errors are denied.
+// Can denies unknown actions and lookup errors.
 func (s *Service) Can(ctx context.Context, userID, databaseID uint, action Action) (bool, error) {
 	need, ok := RequiredLevel(action)
 	if !ok {

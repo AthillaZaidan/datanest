@@ -1,14 +1,9 @@
-// Package models holds the GORM models of the platform database.
-//
-// Rules for this package:
-//   - Never embed gorm.Model or gorm.DeletedAt: every delete is a hard delete.
-//   - Foreign-key behaviour is declared explicitly with constraint tags.
-//   - Secret fields carry json:"-" so they can never be serialised by accident.
+// Package models holds the platform database models.
+// No gorm.Model / DeletedAt: every delete is a hard delete.
 package models
 
 import "time"
 
-// RolePlatformAdmin is the only platform role for now.
 const RolePlatformAdmin = "platform_admin"
 
 type User struct {
@@ -47,7 +42,6 @@ type GroupMember struct {
 	User      User  `gorm:"constraint:OnDelete:CASCADE"`
 }
 
-// DatabaseConnection is a target PostgreSQL database managed by the platform.
 type DatabaseConnection struct {
 	ID       uint   `gorm:"primaryKey"`
 	Name     string `gorm:"size:64;not null;uniqueIndex"`
@@ -55,18 +49,17 @@ type DatabaseConnection struct {
 	Port     int    `gorm:"not null"`
 	DBName   string `gorm:"column:db_name;not null"`
 	Username string `gorm:"not null"`
-	// PasswordEnc is the AES-256-GCM encrypted password (nonce + ciphertext).
+	// AES-256-GCM: nonce + ciphertext.
 	PasswordEnc []byte `gorm:"not null" json:"-"`
 	SSLMode     string `gorm:"size:16;not null;default:disable"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
 
-// Grant gives a group an access level on one database. One row per (group, database).
 type Grant struct {
 	GroupID    uint `gorm:"primaryKey"`
 	DatabaseID uint `gorm:"primaryKey"`
-	// Level is authz.Level stored as an integer: 1 = VIEW, 2 = EDIT.
+	// authz.Level: 1 = VIEW, 2 = EDIT.
 	Level     int16 `gorm:"not null;check:chk_grants_level,level IN (1, 2)"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -83,26 +76,22 @@ const (
 	MigrationFailed  MigrationStatus = "failed"
 )
 
-// Migration is a draft or an executed migration of one target database.
-//
-// References to users use ON DELETE SET NULL plus a username snapshot, so history
-// stays linear and still names the person after the user is deleted.
+// User references use SET NULL + a username snapshot so history survives user deletion.
 type Migration struct {
 	ID         uint               `gorm:"primaryKey"`
 	DatabaseID uint               `gorm:"not null;uniqueIndex:idx_migrations_database_version,priority:1"`
 	Database   DatabaseConnection `gorm:"foreignKey:DatabaseID;constraint:OnDelete:CASCADE"`
-	// Version is NULL while draft; assigned when execution starts.
+	// NULL while draft.
 	Version *int `gorm:"uniqueIndex:idx_migrations_database_version,priority:2"`
 
 	SQL          string          `gorm:"column:sql;type:text;not null"`
 	Status       MigrationStatus `gorm:"size:16;not null;default:draft;index;check:chk_migrations_status,status IN ('draft', 'running', 'success', 'failed')"`
 	ErrorMessage string          `gorm:"type:text;not null;default:''"`
-	// ErrorCode is the PostgreSQL SQLSTATE of a failed execution.
+	// SQLSTATE.
 	ErrorCode string `gorm:"size:5;not null;default:''"`
 
-	// BaseVersion is the latest successful version when the draft was created.
 	BaseVersion *int
-	// Revision is bumped on every draft save (optimistic locking).
+	// Optimistic lock for draft edits.
 	Revision int `gorm:"not null;default:1"`
 
 	CreatedByID        *uint

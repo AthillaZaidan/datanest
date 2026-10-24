@@ -2,7 +2,7 @@ package models
 
 import "gorm.io/gorm"
 
-// All lists every model in dependency order, for AutoMigrate and test resets.
+// All lists every model in dependency order.
 func All() []any {
 	return []any{
 		&User{},
@@ -16,7 +16,7 @@ func All() []any {
 	}
 }
 
-// Migrate creates or updates the platform schema and ensures the built-in roles exist.
+// Migrate updates the schema and ensures built-in roles exist.
 func Migrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(All()...); err != nil {
 		return err

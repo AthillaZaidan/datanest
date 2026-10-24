@@ -1,7 +1,4 @@
-// Package apperr defines the application's error type and the standard error codes of the API.
-//
-// Services return *Error values; the HTTP layer turns any error into a JSON body with Response.
-// Errors that are not *Error become INTERNAL_ERROR, so internal details never reach the client.
+// Package apperr defines client-safe API errors and their standard codes.
 package apperr
 
 import (
@@ -19,8 +16,7 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }
 
-// Is reports whether target has the same code, so errors.Is(err, apperr.ErrForbidden) works
-// for copies made with WithMessage or WithDetails.
+// Is matches by code, so copies from WithMessage/WithDetails still match.
 func (e *Error) Is(target error) bool {
 	var t *Error
 	return errors.As(target, &t) && t.Code == e.Code
@@ -33,19 +29,17 @@ func (e *Error) WithMessage(msg string) *Error {
 	return &c
 }
 
-// WithDetails returns a copy of e carrying details (for example per-field validation errors).
+// WithDetails returns a copy of e with details attached.
 func (e *Error) WithDetails(details any) *Error {
 	c := *e
 	c.Details = details
 	return &c
 }
 
-// New creates an error with the given HTTP status, code, and message.
 func New(status int, code, msg string) *Error {
 	return &Error{Status: status, Code: code, Message: msg}
 }
 
-// Standard errors. Use WithMessage / WithDetails to customise them.
 var (
 	ErrValidation                   = New(http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid.")
 	ErrTransactionControlNotAllowed = New(http.StatusBadRequest, "TRANSACTION_CONTROL_NOT_ALLOWED", "SQL migration tidak boleh berisi perintah kontrol transaction (BEGIN, COMMIT, ROLLBACK, dan sejenisnya).")
@@ -72,14 +66,13 @@ type Body struct {
 	Error BodyError `json:"error"`
 }
 
-// BodyError is the inner object of Body.
 type BodyError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Details any    `json:"details,omitempty"`
 }
 
-// Response maps err to an HTTP status and response body.
+// Response maps err to a status and body; non-*Error values become INTERNAL_ERROR.
 func Response(err error) (int, Body) {
 	var e *Error
 	if !errors.As(err, &e) {
