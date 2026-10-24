@@ -1,7 +1,7 @@
 import { PAGE_SIZES, getRows } from '../../api/explorer'
 import { useAsync } from '../../hooks/useAsync'
 import { ChevronLeftIcon, ChevronRightIcon } from '../icons'
-import { Alert, EmptyState, Loading } from '../kit'
+import { Alert, Empty, Loading } from '../kit'
 import { ui } from '../ui'
 
 type Props = {
@@ -14,8 +14,8 @@ type Props = {
 }
 
 function formatCell(v: unknown) {
-  if (v === null || v === undefined) return <span className="text-zinc-400 italic dark:text-zinc-500">NULL</span>
-  if (typeof v === 'object') return <code className={ui.code}>{JSON.stringify(v)}</code>
+  if (v === null || v === undefined) return <span className="text-muted italic">NULL</span>
+  if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
 }
 
@@ -26,40 +26,41 @@ export default function TableData({ databaseId, schema, table, page, pageSize, o
   )
 
   if (error) return <Alert>{error.message}</Alert>
-  if (!data) return <Loading label="Memuat data…" />
+  if (!data) return <Loading rows={8} label="Memuat data" />
 
   const lastPage = Math.max(1, Math.ceil(data.totalRows / data.pageSize))
   const from = data.totalRows === 0 ? 0 : (data.page - 1) * data.pageSize + 1
   const to = Math.min(data.page * data.pageSize, data.totalRows)
+  // A column whose every value on this page is a number is set right-aligned in tabular figures.
+  const numeric = data.columns.map((_, j) => data.rows.length > 0 && data.rows.every((r) => r[j] === null || typeof r[j] === 'number'))
 
   return (
-    <section className={`${ui.card} overflow-hidden ${loading ? 'opacity-60' : ''}`}>
-      <div className="flex flex-wrap items-center gap-3 border-b border-zinc-200 px-4 py-2.5 text-sm dark:border-zinc-800">
-        <span className={ui.muted}>
-          <strong className="font-medium text-zinc-900 dark:text-zinc-100">{from}–{to}</strong> dari {data.totalRows} baris
-        </span>
-        <label className="ml-auto flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+    <div className={loading ? 'opacity-60' : ''}>
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <p className="text-sm">
+          <span className="num font-medium">{from}–{to}</span> <span className="text-muted">dari</span>{' '}
+          <span className="num font-medium">{data.totalRows.toLocaleString('id-ID')}</span> <span className="text-muted">baris</span>
+        </p>
+        <label className="ml-auto flex items-center gap-2 text-sm text-muted">
           Baris per halaman
-          <select className={ui.selectSm} value={data.pageSize} onChange={(e) => onPage(1, Number(e.target.value))}>
+          <select className={ui.select} value={data.pageSize} onChange={(e) => onPage(1, Number(e.target.value))}>
             {PAGE_SIZES.map((n) => (
               <option key={n} value={n}>{n}</option>
             ))}
           </select>
         </label>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
           <button
-            className={ui.buttonSm}
+            className={ui.button}
             disabled={loading || data.page <= 1}
             onClick={() => onPage(data.page - 1, data.pageSize)}
             aria-label="Halaman sebelumnya"
           >
             <ChevronLeftIcon size={14} /> Sebelumnya
           </button>
-          <span className="px-2 text-xs text-zinc-500 tabular-nums dark:text-zinc-400">
-            {data.page} / {lastPage}
-          </span>
+          <span className="num px-1 text-sm text-muted">{data.page} / {lastPage}</span>
           <button
-            className={ui.buttonSm}
+            className={ui.button}
             disabled={loading || data.page >= lastPage}
             onClick={() => onPage(data.page + 1, data.pageSize)}
             aria-label="Halaman berikutnya"
@@ -70,22 +71,26 @@ export default function TableData({ databaseId, schema, table, page, pageSize, o
       </div>
 
       {data.rows.length === 0 ? (
-        <EmptyState title="Table kosong">Belum ada baris di table ini.</EmptyState>
+        <Empty>Table ini belum punya baris.</Empty>
       ) : (
-        <div className="max-h-[65vh] overflow-auto">
+        <div className="max-h-[calc(100dvh-300px)] min-h-64 overflow-auto rounded-lg border border-line">
           <table className={ui.table}>
-            <thead className="sticky top-0 z-10">
+            <thead className="sticky top-0 z-10 bg-sheet">
               <tr>
-                {data.columns.map((c) => (
-                  <th key={c} className={`${ui.th} whitespace-nowrap normal-case`}>{c}</th>
+                {data.columns.map((c, j) => (
+                  <th key={c} className={`h-10 border-b border-line px-3 font-mono text-xs font-normal whitespace-nowrap text-muted ${numeric[j] ? 'text-right' : ''}`}>{c}</th>
                 ))}
               </tr>
             </thead>
-            <tbody>
+            <tbody className="[&>tr:first-child>td]:border-t-0">
               {data.rows.map((row, i) => (
-                <tr key={i} className={ui.tr}>
+                <tr key={i} className="hover:bg-raised">
                   {row.map((v, j) => (
-                    <td key={j} className={`${ui.td} max-w-xs truncate font-mono text-xs`} title={typeof v === 'string' ? v : undefined}>
+                    <td
+                      key={j}
+                      className={`h-10 max-w-xs truncate border-t border-rule px-3 font-mono text-[13px] ${numeric[j] ? ui.num : ''}`}
+                      title={typeof v === 'string' ? v : undefined}
+                    >
                       {formatCell(v)}
                     </td>
                   ))}
@@ -95,6 +100,6 @@ export default function TableData({ databaseId, schema, table, page, pageSize, o
           </table>
         </div>
       )}
-    </section>
+    </div>
   )
 }
