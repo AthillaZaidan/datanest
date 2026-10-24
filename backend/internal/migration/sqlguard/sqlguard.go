@@ -9,15 +9,23 @@ import (
 )
 
 // Check tokenizes enough of PostgreSQL SQL to ignore words in quoted strings,
-// identifiers, comments, and dollar-quoted function bodies.
+// identifiers, comments, and dollar-quoted function bodies. Only the leading word of
+// each statement matters, so keywords like CASE ... END stay allowed.
 func Check(sql string) error {
 	words := tokens(sql)
 	for i, word := range words {
+		if i > 0 && words[i-1] != ";" {
+			continue
+		}
+		next := ""
+		if i+1 < len(words) {
+			next = words[i+1]
+		}
 		switch word {
-		case "begin", "commit", "end", "rollback", "abort", "savepoint", "release", "prepare":
+		case "begin", "commit", "end", "rollback", "abort", "savepoint", "release":
 			return apperr.ErrTransactionControlNotAllowed
-		case "start":
-			if i+1 < len(words) && words[i+1] == "transaction" {
+		case "start", "prepare":
+			if next == "transaction" {
 				return apperr.ErrTransactionControlNotAllowed
 			}
 		}
@@ -82,6 +90,9 @@ func tokens(sql string) []string {
 				}
 				continue
 			}
+			i++
+		case sql[i] == ';':
+			out = append(out, ";")
 			i++
 		case isWord(sql[i]):
 			start := i
