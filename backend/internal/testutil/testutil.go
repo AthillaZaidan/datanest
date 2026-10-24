@@ -57,7 +57,7 @@ func PlatformDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// TargetDB returns the test target database with an empty public schema.
+// TargetDB returns the test target database with only an empty public schema.
 func TargetDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("pgx", dsn(t, "TEST_TARGET_DSN"))
@@ -66,7 +66,17 @@ func TargetDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	if _, err := db.Exec(`DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public`); err != nil {
+	_, err = db.Exec(`DO $$
+		DECLARE s text;
+		BEGIN
+			FOR s IN SELECT nspname FROM pg_namespace
+				WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast') AND nspname NOT LIKE 'pg\_%'
+			LOOP
+				EXECUTE format('DROP SCHEMA %I CASCADE', s);
+			END LOOP;
+			CREATE SCHEMA public;
+		END $$`)
+	if err != nil {
 		t.Fatalf("reset target db: %v", err)
 	}
 	return db

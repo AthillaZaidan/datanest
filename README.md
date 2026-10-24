@@ -39,3 +39,9 @@ Session disimpan hanya di memori server: restart server mengeluarkan seluruh pen
 - Grace period: 30 detik agar request yang berjalan saat rotasi tetap valid.
 
 Setiap request pengubah state memerlukan `X-CSRF-Token` synchronizer token, JSON, serta `Origin` yang sesuai `ALLOWED_ORIGIN`. Token disimpan di memori frontend dan dikirim oleh API client. Login menggunakan bcrypt; password, token CSRF, serta session identifier tidak dicatat atau dikirim dalam response body. Platform Admin tidak otomatis mendapat akses database target—akses target tetap berasal dari grant group.
+
+## Database explorer dan migrations
+
+Explorer hanya tersedia untuk pengguna dengan akses **VIEW** dan memakai transaction `READ ONLY`. Schema sistem serta tabel `_platform_migrations` disembunyikan; identifier dari URL selalu divalidasi terhadap katalog. Data mendukung pagination 10, 25, 50, atau 100 baris dan diurutkan konsisten dengan primary key (atau `ctid` bila tidak tersedia).
+
+Lifecycle migration adalah `draft → running → success | failed`. Pengguna **EDIT** dapat membuat, mengubah, menghapus, menduplikasi, dan menjalankan draft; riwayat yang sudah dieksekusi tidak dapat diubah. Versi diberi saat eksekusi dimulai sehingga urutannya linear per database. Eksekusi selalu dibungkus satu transaction dengan batas lock, statement, dan total waktu; migration gagal di-rollback serta tetap dicatat. Satu database hanya menjalankan satu migration secara bersamaan.

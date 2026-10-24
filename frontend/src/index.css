@@ -1,27 +1,5 @@
+@import "tailwindcss";
+
 :root {
-  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
   color-scheme: light dark;
-}
-
-body {
-  margin: 0;
-}
-
-.layout {
-  display: flex;
-  min-height: 100vh;
-}
-
-.layout nav {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 1rem;
-  min-width: 12rem;
-  border-right: 1px solid #ccc;
-}
-
-.layout main {
-  flex: 1;
-  padding: 1rem 2rem;
 }
