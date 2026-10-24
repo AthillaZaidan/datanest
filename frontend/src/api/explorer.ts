@@ -1,24 +1,4 @@
-// TODO(A): switch to the shared API client once it exists (GETs need no CSRF token).
-
-export class ApiError extends Error {
-  status: number
-  code: string
-
-  constructor(status: number, code: string, message: string) {
-    super(message)
-    this.status = status
-    this.code = code
-  }
-}
-
-async function getJSON<T>(path: string): Promise<T> {
-  const res = await fetch(path, { credentials: 'same-origin' })
-  const body = await res.json().catch(() => null)
-  if (!res.ok) {
-    throw new ApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText)
-  }
-  return body as T
-}
+import { getJSON } from './http'
 
 export type Schema = { name: string }
 export type Table = { name: string }

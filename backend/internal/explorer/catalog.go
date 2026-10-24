@@ -8,10 +8,11 @@ import (
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
+	"github.com/AthillaZaidan/datanest/backend/internal/migration"
 )
 
-// hiddenTable is the platform's migration ledger in public; users never see it.
-const hiddenTable = "_platform_migrations"
+// hiddenTable is the platform's migration ledger; users never see it.
+const hiddenTable = migration.LedgerTable
 
 type Schema struct {
 	Name string `json:"name"`
