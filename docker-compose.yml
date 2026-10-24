@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: datanest
       POSTGRES_DB: datanest_platform
     ports:
-      - "${PLATFORM_PG_PORT:-5432}:5432"
+      - "${PLATFORM_PG_PORT:-15432}:5432"
     volumes:
       - platform-data:/var/lib/postgresql/data
     healthcheck:
@@ -21,7 +21,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "${TARGET_PG_PORT:-5433}:5432"
+      - "${TARGET_PG_PORT:-15433}:5432"
     volumes:
       - target-data:/var/lib/postgresql/data
       - ./docker/target-init.sql:/docker-entrypoint-initdb.d/01-target-init.sql:ro
@@ -38,7 +38,7 @@ services:
       POSTGRES_PASSWORD: datanest_test
       POSTGRES_DB: datanest_test_platform
     ports:
-      - "${TEST_PG_PORT:-5434}:5432"
+      - "${TEST_PG_PORT:-15434}:5432"
     tmpfs:
       - /var/lib/postgresql/data
     volumes:
