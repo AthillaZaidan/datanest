@@ -27,8 +27,11 @@ func main() {
 }
 
 func run() error {
-	// .env is optional; real environment variables take precedence.
-	_ = godotenv.Load(".env", "../.env")
+	// .env is optional; real environment variables take precedence. Load each file on its
+	// own: godotenv stops at the first missing file.
+	for _, f := range []string{".env", "../.env"} {
+		_ = godotenv.Load(f)
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
