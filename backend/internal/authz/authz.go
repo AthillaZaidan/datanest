@@ -83,7 +83,7 @@ func RequiredLevel(action Action) (level Level, ok bool) {
 	return level, ok
 }
 
-var ErrNotImplemented = errors.New("authz: EffectiveLevel not implemented")
+var ErrUnavailable = errors.New("authz: database unavailable")
 
 type Service struct {
 	db *gorm.DB
@@ -94,9 +94,22 @@ func New(db *gorm.DB) *Service {
 }
 
 // EffectiveLevel is the highest level among the user's groups; None without a grant.
-// TODO(B): implement (PRD §9).
+// No administrator bypass: database grants always come from memberships.
 func (s *Service) EffectiveLevel(ctx context.Context, userID, databaseID uint) (Level, error) {
-	return None, ErrNotImplemented
+	if s.db == nil {
+		return None, ErrUnavailable
+	}
+	var level int16
+	err := s.db.WithContext(ctx).Raw(`SELECT COALESCE(MAX(g.level), 0)
+ FROM grants g JOIN group_members gm ON gm.group_id = g.group_id
+ WHERE gm.user_id = ? AND g.database_id = ?`, userID, databaseID).Scan(&level).Error
+	if err != nil {
+		return None, err
+	}
+	if level < 0 || level > 2 {
+		return None, fmt.Errorf("authz: invalid stored level")
+	}
+	return Level(level), nil
 }
 
 // Can denies unknown actions and lookup errors.
