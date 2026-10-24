@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import type { ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { ApiError } from '../api/client'
 import { getDatabase } from '../api/databases'
@@ -12,46 +11,22 @@ import {
   getMigration,
   updateMigration,
 } from '../api/migrations'
-import { CopyIcon, LockIcon, PlayIcon, SaveIcon, TrashIcon } from '../components/icons'
-import { Alert, Badge, Card, Loading, PageHeader } from '../components/kit'
+import { CopyIcon, PlayIcon, SaveIcon, TrashIcon } from '../components/icons'
+import { Alert, Loading, Meta, PageHeader } from '../components/kit'
+import SqlEditor from '../components/migrations/SqlEditor'
 import StatusBadge from '../components/migrations/StatusBadge'
 import { ui } from '../components/ui'
+import { useCrumbs } from '../context/crumbs'
 import { useAsync } from '../hooks/useAsync'
-import { formatTime } from '../utils/format'
+import { duration, formatTime } from '../utils/format'
 
-const sqlBox =
-  'block min-h-72 w-full resize-y rounded-b-xl border-0 bg-zinc-950 p-4 font-mono text-[13px] leading-relaxed text-zinc-100 placeholder:text-zinc-500 focus:ring-2 focus:ring-indigo-500/40 focus:outline-none read-only:text-zinc-300'
-
-function useLevel(databaseId: number | string | undefined) {
+function useDatabase(databaseId: number | string | undefined) {
   const { data } = useAsync(() => (databaseId ? getDatabase(databaseId) : Promise.resolve(null)), [databaseId])
   return data
 }
 
-function SqlEditor({ value, onChange, readOnly, placeholder }: { value: string; onChange?: (v: string) => void; readOnly?: boolean; placeholder?: string }) {
-  return (
-    <div className="overflow-hidden rounded-xl border border-zinc-200 shadow-xs dark:border-zinc-800">
-      <div className="flex items-center justify-between bg-zinc-900 px-4 py-2 text-xs text-zinc-400">
-        <span className="font-mono">migration.sql</span>
-        {readOnly && (
-          <span className="inline-flex items-center gap-1">
-            <LockIcon size={12} /> read-only
-          </span>
-        )}
-      </div>
-      <textarea
-        className={sqlBox}
-        value={value}
-        readOnly={readOnly}
-        spellCheck={false}
-        placeholder={placeholder}
-        onChange={(e) => onChange?.(e.target.value)}
-      />
-    </div>
-  )
-}
-
 function ViewOnlyNotice() {
-  return <Alert tone="info">Anda hanya memiliki akses VIEW ke database ini, jadi migration tidak dapat diubah atau dijalankan.</Alert>
+  return <Alert tone="info">Anda punya akses View ke database ini: migration bisa dibaca, tetapi tidak bisa diubah atau dijalankan.</Alert>
 }
 
 export default function MigrationEditor() {
@@ -59,12 +34,22 @@ export default function MigrationEditor() {
   return migrationId ? <ExistingMigration id={migrationId} /> : <NewMigration databaseId={databaseId ?? ''} />
 }
 
+function crumbsFor(databaseId: number | string, name: string | undefined, last: string) {
+  return [
+    { label: 'Databases', to: '/databases' },
+    { label: name ?? `Database #${databaseId}`, to: `/databases/${databaseId}` },
+    { label: 'Riwayat migration', to: `/databases/${databaseId}/migrations` },
+    { label: last },
+  ]
+}
+
 function NewMigration({ databaseId }: { databaseId: string }) {
   const navigate = useNavigate()
-  const db = useLevel(databaseId)
+  const db = useDatabase(databaseId)
   const [sql, setSql] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  useCrumbs(crumbsFor(databaseId, db?.name, 'Migration baru'))
 
   const save = async () => {
     setBusy(true)
@@ -81,33 +66,24 @@ function NewMigration({ databaseId }: { databaseId: string }) {
   return (
     <>
       <PageHeader
-        back={{ to: `/databases/${databaseId}/migrations`, label: 'Riwayat migration' }}
         title="Migration baru"
-        subtitle={db && <>Draft untuk <strong className="font-medium text-zinc-700 dark:text-zinc-300">{db.name}</strong>. Draft bisa ditinjau dulu sebelum dijalankan.</>}
+        subtitle={db && `Draft untuk ${db.name}, dibuat di atas versi schema ${db.currentVersion ? `v${db.currentVersion}` : 'awal'}. Draft bisa ditinjau sebelum dijalankan.`}
       />
       {db?.myLevel === 'VIEW' ? (
         <ViewOnlyNotice />
       ) : (
-        <>
-          <SqlEditor value={sql} onChange={setSql} placeholder="ALTER TABLE ..." />
+        <div className="max-w-[960px]">
+          <SqlEditor value={sql} onChange={setSql} placeholder="ALTER TABLE products ADD COLUMN sku text;" />
           {error && <div className="mt-4"><Alert>{error}</Alert></div>}
-          <div className="mt-4 flex gap-2">
+          <div className="mt-4 flex items-center gap-3">
             <button className={ui.buttonPrimary} disabled={busy || !sql.trim()} onClick={save}>
               <SaveIcon /> Simpan draft
             </button>
+            <span className={ui.small}>Satu migration dijalankan dalam satu transaction. BEGIN, COMMIT, dan ROLLBACK tidak diperlukan.</span>
           </div>
-        </>
+        </div>
       )}
     </>
-  )
-}
-
-function Meta({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <dt className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{label}</dt>
-      <dd className="mt-0.5 text-sm">{children}</dd>
-    </div>
   )
 }
 
@@ -118,7 +94,9 @@ function ExistingMigration({ id }: { id: string }) {
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [busy, setBusy] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
-  const db = useLevel(migration?.databaseId)
+  const db = useDatabase(migration?.databaseId)
+  const title = migration ? (migration.version ? `Migration v${migration.version}` : `Draft #${migration.id}`) : 'Migration'
+  useCrumbs(crumbsFor(migration?.databaseId ?? '', db?.name, migration?.version ? `v${migration.version}` : `Draft #${id}`))
 
   useEffect(() => {
     let active = true
@@ -148,7 +126,7 @@ function ExistingMigration({ id }: { id: string }) {
     }
   }
 
-  if (!migration) return error ? <Alert>{error.message}</Alert> : <Loading />
+  if (!migration) return error ? <Alert>{error.message}</Alert> : <Loading rows={6} />
 
   const canEdit = db?.myLevel === 'EDIT'
   const isDraft = migration.status === 'draft'
@@ -176,18 +154,18 @@ function ExistingMigration({ id }: { id: string }) {
       navigate(`/migrations/${m.id}`)
     })
 
+  const subtitle =
+    migration.status === 'success'
+      ? `Dijalankan ${migration.executedBy} pada ${formatTime(migration.startedAt)}, selesai dalam ${duration(migration.startedAt, migration.finishedAt)}.`
+      : migration.status === 'failed'
+        ? `Gagal saat dijalankan ${migration.executedBy} pada ${formatTime(migration.startedAt)}. Perubahan di-rollback, schema tetap di versi sebelumnya.`
+        : migration.status === 'running'
+          ? `Sedang dijalankan ${migration.executedBy} sejak ${formatTime(migration.startedAt)}.`
+          : `Draft dari ${migration.createdBy}, dibuat di atas versi ${migration.baseVersion ? `v${migration.baseVersion}` : 'awal'}.`
+
   return (
     <>
-      <PageHeader
-        back={{ to: `/databases/${migration.databaseId}/migrations`, label: 'Riwayat migration' }}
-        title={`Migration ${migration.version ? `v${migration.version}` : `#${migration.id}`}`}
-        badges={
-          <>
-            <StatusBadge status={migration.status} />
-            {db && <Badge>{db.name}</Badge>}
-          </>
-        }
-      />
+      <PageHeader title={title} badges={<StatusBadge status={migration.status} />} subtitle={subtitle} />
 
       {db?.myLevel === 'VIEW' && <ViewOnlyNotice />}
 
@@ -210,9 +188,19 @@ function ExistingMigration({ id }: { id: string }) {
         </Alert>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_16rem]">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_288px] lg:items-start">
         <div className="min-w-0 space-y-4">
           <SqlEditor value={sql} readOnly={!isDraft || !canEdit} onChange={setSql} />
+
+          {migration.status === 'failed' && migration.errorMessage && (
+            <div className="rounded-lg bg-neg-bg px-4 py-3 text-sm text-neg-ink">
+              <p className="font-medium">
+                Error dari PostgreSQL{migration.errorCode && <> <span className="font-mono font-normal">SQLSTATE {migration.errorCode}</span></>}
+              </p>
+              <pre className="mt-1 font-mono text-[13px] whitespace-pre-wrap">{migration.errorMessage}</pre>
+            </div>
+          )}
+
           {canEdit && (
             <div className="flex flex-wrap items-center gap-2">
               {isDraft && (
@@ -228,7 +216,7 @@ function ExistingMigration({ id }: { id: string }) {
                   >
                     <PlayIcon /> Jalankan
                   </button>
-                  {dirty && <span className={ui.muted}>Ada perubahan yang belum disimpan.</span>}
+                  {dirty && <span className={ui.small}>Ada perubahan yang belum disimpan.</span>}
                   <button className={`${ui.buttonDanger} ml-auto`} disabled={busy} onClick={remove}>
                     <TrashIcon /> Hapus
                   </button>
@@ -241,41 +229,25 @@ function ExistingMigration({ id }: { id: string }) {
               )}
             </div>
           )}
-
-          {migration.status === 'failed' && migration.errorMessage && (
-            <div className="overflow-hidden rounded-xl border border-red-200 dark:border-red-900/60">
-              <div className="flex items-center gap-2 bg-red-50 px-4 py-2 text-xs font-medium text-red-700 dark:bg-red-950/40 dark:text-red-300">
-                Error dari database {migration.errorCode && <code className="font-mono">[{migration.errorCode}]</code>}
-              </div>
-              <pre className="px-4 py-3 font-mono text-xs whitespace-pre-wrap text-red-800 dark:text-red-200">{migration.errorMessage}</pre>
-            </div>
-          )}
-          {migration.status === 'running' && <Loading label="Migration sedang berjalan…" />}
         </div>
 
-        <Card title="Detail">
-          <dl className="space-y-3">
-            <Meta label="Dibuat">
-              {migration.createdBy}
-              <span className="block text-xs text-zinc-500 dark:text-zinc-400">{formatTime(migration.createdAt)}</span>
-            </Meta>
+        <aside>
+          <h2 className="mb-1 text-base font-semibold">Detail</h2>
+          <dl>
+            <Meta label="Database">{db?.name ?? '-'}</Meta>
+            <Meta label="Versi">{migration.version ? <span className="font-mono">v{migration.version}</span> : <span className="text-muted">diberi saat dijalankan</span>}</Meta>
+            <Meta label="Versi dasar"><span className="font-mono">{migration.baseVersion ? `v${migration.baseVersion}` : '-'}</span></Meta>
+            <Meta label="Dibuat">{migration.createdBy}<span className="block text-xs text-muted">{formatTime(migration.createdAt)}</span></Meta>
             {migration.updatedBy && (
-              <Meta label="Terakhir diubah">
-                {migration.updatedBy}
-                <span className="block text-xs text-zinc-500 dark:text-zinc-400">{formatTime(migration.updatedAt)}</span>
-              </Meta>
+              <Meta label="Terakhir diubah">{migration.updatedBy}<span className="block text-xs text-muted">{formatTime(migration.updatedAt)}</span></Meta>
             )}
             {migration.executedBy && (
-              <Meta label="Dijalankan">
-                {migration.executedBy}
-                <span className="block text-xs text-zinc-500 dark:text-zinc-400">
-                  {formatTime(migration.startedAt)} → {formatTime(migration.finishedAt)}
-                </span>
-              </Meta>
+              <Meta label="Dijalankan">{migration.executedBy}<span className="block text-xs text-muted">{formatTime(migration.startedAt)}</span></Meta>
             )}
-            {isDraft && <Meta label="Versi dasar">{migration.baseVersion ? `v${migration.baseVersion}` : '—'}</Meta>}
+            {migration.finishedAt && <Meta label="Durasi"><span className="num">{duration(migration.startedAt, migration.finishedAt)}</span></Meta>}
+            <Meta label="Revisi"><span className="num">{migration.revision}</span></Meta>
           </dl>
-        </Card>
+        </aside>
       </div>
     </>
   )
