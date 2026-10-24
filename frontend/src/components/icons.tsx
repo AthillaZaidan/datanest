@@ -1,3 +1,4 @@
+/* eslint-disable react/only-export-components -- icons are components built by one factory */
 import type { ReactNode, SVGProps } from 'react'
 
 type Props = SVGProps<SVGSVGElement> & { size?: number }
@@ -11,7 +12,7 @@ function icon(paths: ReactNode) {
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
-        strokeWidth={1.8}
+        strokeWidth={1.5}
         strokeLinecap="round"
         strokeLinejoin="round"
         aria-hidden="true"
@@ -101,3 +102,16 @@ export const LockIcon = icon(
     <path d="M8 11V7a4 4 0 0 1 8 0v4" />
   </>,
 )
+export const MenuIcon = icon(<path d="M4 7h16M4 12h16M4 17h16" />)
+export const CloseIcon = icon(<path d="M6 6l12 12M18 6 6 18" />)
+
+// Datanest's mark: three stacked platters of a database, the top one filled, nested like a nest.
+export function Mark({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <ellipse cx="12" cy="6" rx="8" ry="3" fill="var(--color-accent)" />
+      <path d="M4 11c0 1.7 3.6 3 8 3s8-1.3 8-3" fill="none" stroke="var(--color-accent)" strokeWidth="2" strokeLinecap="round" />
+      <path d="M5.5 16.5c1.2 1.4 3.7 2.5 6.5 2.5s5.3-1.1 6.5-2.5" fill="none" stroke="var(--color-accent)" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  )
+}
