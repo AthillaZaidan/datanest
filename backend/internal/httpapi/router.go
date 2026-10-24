@@ -11,8 +11,12 @@ import (
 
 // Deps are the middlewares and handlers the router needs. Nil middlewares fail closed (501).
 type Deps struct {
+	Security     gin.HandlerFunc
 	RequireAuth  gin.HandlerFunc
 	RequireAdmin gin.HandlerFunc
+	Login        gin.HandlerFunc
+	Logout       gin.HandlerFunc
+	Me           gin.HandlerFunc
 }
 
 func NewRouter(d Deps) *gin.Engine {
@@ -21,14 +25,17 @@ func NewRouter(d Deps) *gin.Engine {
 
 	r := gin.New()
 	r.Use(gin.Recovery())
+	if d.Security != nil {
+		r.Use(d.Security)
+	}
 
 	api := r.Group("/api")
 	api.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 
 	auth := api.Group("/auth")
-	auth.POST("/login", notImplemented)
-	auth.POST("/logout", requireAuth, notImplemented)
-	auth.GET("/me", requireAuth, notImplemented)
+	auth.POST("/login", orNotImplemented(d.Login))
+	auth.POST("/logout", requireAuth, orNotImplemented(d.Logout))
+	auth.GET("/me", requireAuth, orNotImplemented(d.Me))
 
 	admin := api.Group("/admin", requireAuth, requireAdmin)
 	admin.GET("/users", notImplemented)
