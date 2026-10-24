@@ -2,6 +2,7 @@
 package httpapi
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -25,6 +26,7 @@ func NewRouter(d Deps) *gin.Engine {
 
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(RequestLogger(log.Default()))
 	if d.Security != nil {
 		r.Use(d.Security)
 	}
