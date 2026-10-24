@@ -2,6 +2,7 @@
 package httpapi
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -14,8 +15,12 @@ import (
 // Deps are what the router needs. Nil middlewares fail closed and nil services leave
 // their routes at 501.
 type Deps struct {
+	Security     gin.HandlerFunc
 	RequireAuth  gin.HandlerFunc
 	RequireAdmin gin.HandlerFunc
+	Login        gin.HandlerFunc
+	Logout       gin.HandlerFunc
+	Me           gin.HandlerFunc
 	Explorer     *explorer.Service
 	Migrations   *migration.Service
 }
@@ -40,14 +45,18 @@ func NewRouter(d Deps) *gin.Engine {
 
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(RequestLogger(log.Default()))
+	if d.Security != nil {
+		r.Use(d.Security)
+	}
 
 	api := r.Group("/api")
 	api.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 
 	auth := api.Group("/auth")
-	auth.POST("/login", notImplemented)
-	auth.POST("/logout", requireAuth, notImplemented)
-	auth.GET("/me", requireAuth, notImplemented)
+	auth.POST("/login", orNotImplemented(d.Login))
+	auth.POST("/logout", requireAuth, orNotImplemented(d.Logout))
+	auth.GET("/me", requireAuth, orNotImplemented(d.Me))
 
 	admin := api.Group("/admin", requireAuth, requireAdmin)
 	admin.GET("/users", notImplemented)

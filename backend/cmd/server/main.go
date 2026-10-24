@@ -15,9 +15,11 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/AthillaZaidan/datanest/backend/internal/auth"
 	"github.com/AthillaZaidan/datanest/backend/internal/config"
 	"github.com/AthillaZaidan/datanest/backend/internal/httpapi"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/session"
 )
 
 func main() {
@@ -52,12 +54,19 @@ func run() error {
 	if err := models.Migrate(db); err != nil {
 		return err
 	}
-
-	// TODO(A): seed admin, start session cleanup. TODO(C): reconcile running migrations.
+	if err := auth.SeedAdmin(db, cfg.AdminUsername, cfg.AdminPassword); err != nil {
+		return err
+	}
+	sessions := session.New(session.Config(cfg.Session), nil)
+	defer sessions.Close()
+	authService := &auth.Service{DB: db, Sessions: sessions, CookieSecure: cfg.CookieSecure}
 
 	srv := &http.Server{
-		Addr:              ":" + cfg.AppPort,
-		Handler:           httpapi.NewRouter(httpapi.Deps{}),
+		Addr: ":" + cfg.AppPort,
+		Handler: httpapi.NewRouter(httpapi.Deps{
+			Security: auth.ValidateStateRequest(cfg.AllowedOrigin), RequireAuth: authService.RequireAuth,
+			RequireAdmin: authService.RequireAdmin, Login: authService.Login, Logout: authService.Logout, Me: authService.Me,
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
