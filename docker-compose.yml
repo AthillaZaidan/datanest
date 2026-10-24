@@ -1,0 +1,54 @@
+services:
+  platform-pg:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: datanest
+      POSTGRES_PASSWORD: datanest
+      POSTGRES_DB: datanest_platform
+    ports:
+      - "${PLATFORM_PG_PORT:-5432}:5432"
+    volumes:
+      - platform-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datanest -d datanest_platform"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  target-pg:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "${TARGET_PG_PORT:-5433}:5432"
+    volumes:
+      - target-data:/var/lib/postgresql/data
+      - ./docker/target-init.sql:/docker-entrypoint-initdb.d/01-target-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  test-pg:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: datanest_test
+      POSTGRES_PASSWORD: datanest_test
+      POSTGRES_DB: datanest_test_platform
+    ports:
+      - "${TEST_PG_PORT:-5434}:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./docker/test-init.sql:/docker-entrypoint-initdb.d/01-test-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datanest_test -d datanest_test_platform"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  platform-data:
+  target-data:
