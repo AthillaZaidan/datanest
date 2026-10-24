@@ -6,6 +6,7 @@ import { Mark } from '../components/icons'
 import { Alert, Field } from '../components/kit'
 import { ui } from '../components/ui'
 import { useAuth } from '../context/AuthContext'
+import { demoAccounts } from '../dev/demoAccounts'
 
 export default function Login() {
   const { user, login } = useAuth()
@@ -54,6 +55,33 @@ export default function Login() {
           </form>
         </div>
         <p className="mt-4 text-xs text-muted">Akun dibuat oleh Platform Admin. Akses database diberikan lewat group.</p>
+        {import.meta.env.DEV && (
+          <section aria-labelledby="demo" className="mt-6">
+            <h2 id="demo" className="mb-2 text-sm font-medium">Akun demo</h2>
+            <ul className="space-y-1">
+              {demoAccounts.map((a) => (
+                <li key={a.username}>
+                  <button
+                    type="button"
+                    className="w-full rounded-lg px-3 py-2 text-left transition-colors hover:bg-active focus-visible:outline-2 focus-visible:outline-accent"
+                    onClick={() => {
+                      setUsername(a.username)
+                      setPassword(a.password)
+                      setError('')
+                    }}
+                  >
+                    <span className="flex items-baseline justify-between gap-3">
+                      <span className="font-mono text-[13px] font-medium">{a.username}</span>
+                      <span className="text-xs text-muted">{a.role}</span>
+                    </span>
+                    <span className="block text-xs text-muted">{a.access}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-xs text-muted">Hanya tampil saat development. Jalankan seed dulu agar akun ini ada.</p>
+          </section>
+        )}
       </div>
     </main>
   )
