@@ -1,0 +1,4 @@
+{{define "content"}}
+{{template "header" (dict "Title" "Tidak dapat menampilkan halaman" "Subtitle" .Message)}}
+<div class="empty"><span>{{if eq .Status 404}}Alamat ini tidak ada atau sudah dipindahkan.{{else if eq .Status 403}}Minta Platform Admin menambahkan Anda ke group yang punya akses.{{else}}Coba lagi beberapa saat lagi.{{end}}</span><a class="btn" href="/databases">Ke Databases</a></div>
+{{end}}
