@@ -290,3 +290,16 @@ func TestExplainFromMigrationPage(t *testing.T) {
 		t.Fatal("explain kept the DDL")
 	}
 }
+
+func TestUnknownPageRendersFully(t *testing.T) {
+	e := setup(t)
+	anon := e.do("GET", "/nope", "", nil)
+	if anon.Code != http.StatusNotFound || !strings.Contains(anon.Body.String(), "</html>") {
+		t.Fatalf("anonymous 404 cut short: %d", anon.Code)
+	}
+	c := e.login("editor")
+	w := c.get("/nope")
+	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "</html>") || !strings.Contains(w.Body.String(), "editor") {
+		t.Fatalf("signed-in 404: %d", w.Code)
+	}
+}

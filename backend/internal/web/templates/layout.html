@@ -19,7 +19,7 @@
 {{define "nav"}}
 <nav class="flex flex-col gap-0.5" aria-label="Navigasi utama">
   <a href="/databases" class="{{if or (active .Path "/databases") (active .Path "/migrations")}}nav-on{{else}}nav{{end}}">{{icon "database" 16}}Databases</a>
-  {{if .User.IsAdmin}}
+  {{if and .User .User.IsAdmin}}
   <p class="mt-6 mb-1.5 px-2.5 text-xs text-muted">Administrasi</p>
   <a href="/admin/users" class="{{if active .Path "/admin/users"}}nav-on{{else}}nav{{end}}">{{icon "user" 16}}Users</a>
   <a href="/admin/groups" class="{{if active .Path "/admin/groups"}}nav-on{{else}}nav{{end}}">{{icon "users" 16}}Groups</a>
@@ -76,12 +76,12 @@
           <button type="button" class="btn-sm-ghost size-9" onclick="this.closest('details').open=false" aria-label="Tutup menu">{{icon "x" 18}}</button>
         </div>
         <div class="flex-1 overflow-y-auto px-3 pt-2">{{template "nav" .}}</div>
-        <div class="border-t border-line px-4 py-3">{{template "account" .}}</div>
+        {{if .User}}<div class="border-t border-line px-4 py-3">{{template "account" .}}</div>{{end}}
       </div>
     </details>
     <span class="lg:hidden">{{template "mark" 20}}</span>
     {{template "breadcrumb" .Crumbs}}
-    <div class="ml-auto hidden lg:block">{{template "account" .}}</div>
+    {{if .User}}<div class="ml-auto hidden lg:block">{{template "account" .}}</div>{{else}}<a class="btn ml-auto" href="/login">Masuk</a>{{end}}
   </header>
   <aside class="hidden px-3 pt-2 lg:block">{{template "nav" .}}</aside>
   <main class="min-h-0 flex-1 overflow-y-auto bg-sheet lg:mr-2 lg:mb-2 lg:rounded-2xl lg:border lg:border-line">

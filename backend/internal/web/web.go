@@ -112,6 +112,10 @@ func Register(r *gin.Engine, h *Handler) {
 			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "NOT_FOUND", "message": "Resource tidak ditemukan."}})
 			return
 		}
+		// Unknown paths skip requireSession; show the signed-in shell when there is a session.
+		if sess, ok := h.Auth.Authenticate(c); ok {
+			c.Set("web.session", sess)
+		}
 		h.fail(c, apperr.ErrNotFound)
 	})
 }
