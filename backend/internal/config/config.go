@@ -54,7 +54,7 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 
 	cfg := &Config{
 		AppPort:       r.str("APP_PORT", "8080"),
-		AllowedOrigin: r.str("ALLOWED_ORIGIN", "http://localhost:5173"),
+		AllowedOrigin: r.str("ALLOWED_ORIGIN", "http://localhost:8080"),
 		CookieSecure:  r.boolean("COOKIE_SECURE", false),
 		PlatformDSN:   r.str("PLATFORM_DSN", ""),
 		AdminUsername: r.str("ADMIN_USERNAME", ""),
