@@ -1,0 +1,42 @@
+{{define "content"}}
+{{$csrf := .CSRF}}{{$edit := .Edit}}
+<header class="mb-6"><h1 class="text-[22px] leading-8 font-semibold tracking-[-0.01em]">Users</h1>
+  <p class="mt-1 text-sm text-muted">{{len .Users}} user, {{.Admins}} Platform Admin. Akses database diatur lewat Groups.</p></header>
+{{template "flash" .}}
+<div class="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)] lg:items-start">
+  <form method="post" action="/admin/users" class="well space-y-4">
+    <input type="hidden" name="csrf_token" value="{{$csrf}}">
+    {{with $edit}}<input type="hidden" name="id" value="{{.ID}}">{{end}}
+    <h2 class="text-base font-semibold">{{if $edit}}Edit {{$edit.Username}}{{else}}Buat user{{end}}</h2>
+    <label class="block"><span class="label">Username</span><input class="input" name="username" required maxlength="64" value="{{with $edit}}{{.Username}}{{end}}"></label>
+    <label class="block"><span class="label">{{if $edit}}Password baru{{else}}Password{{end}}</span>
+      <input class="input" type="password" name="password" autocomplete="new-password" minlength="8" {{if not $edit}}required{{end}}>
+      <span class="mt-1.5 block text-xs text-muted">{{if $edit}}Kosongkan untuk mempertahankan password lama.{{else}}Minimal 8 karakter.{{end}}</span></label>
+    <div class="flex gap-2 pt-1"><button class="btn-primary">Simpan</button><a class="btn" href="/admin/users">Batal</a></div>
+  </form>
+  <div class="min-w-0 overflow-x-auto">
+    {{if not .Users}}<div class="empty"><span>Belum ada user.</span></div>{{else}}
+    <table class="tbl min-w-[520px]">
+      <thead><tr><th class="th w-2/5">Username</th><th class="th">Role</th><th class="th"><span class="sr-only">Aksi</span></th></tr></thead>
+      <tbody>
+      {{range .Users}}
+      <tr class="{{if and $edit (eq $edit.ID .ID)}}bg-raised{{end}}">
+        <td class="td h-14"><span class="flex items-center gap-2.5"><span class="grid size-7 flex-none place-items-center rounded-full text-xs font-semibold uppercase" style="{{tint .ID}}">{{initial .Username}}</span><span class="font-medium">{{.Username}}</span></span></td>
+        <td class="td">{{if .IsAdmin}}<span class="pill-neutral">Platform Admin</span>{{else}}<span class="text-muted">User</span>{{end}}</td>
+        <td class="td"><div class="flex justify-end gap-1.5">
+          <a class="btn-sm" href="/admin/users?edit={{.ID}}">{{icon "pencil" 13}} Edit</a>
+          <form method="post" action="/admin/users/{{.ID}}/role" onsubmit="return confirm({{printf "%s admin untuk %s?" (or (and .IsAdmin "Cabut") "Beri") .Username}})">
+            <input type="hidden" name="csrf_token" value="{{$csrf}}"><input type="hidden" name="add" value="{{if .IsAdmin}}0{{else}}1{{end}}">
+            <button class="btn-sm">{{if .IsAdmin}}Cabut admin{{else}}Beri admin{{end}}</button>
+          </form>
+          <form method="post" action="/admin/users/{{.ID}}/delete" data-name="{{.Username}}" onsubmit="return confirm({{printf "Hapus %s? Semua session user akan dicabut." .Username}})">
+            <input type="hidden" name="csrf_token" value="{{$csrf}}"><button class="btn-sm-danger">{{icon "trash-2" 13}} Hapus</button>
+          </form>
+        </div></td>
+      </tr>
+      {{end}}
+      </tbody>
+    </table>{{end}}
+  </div>
+</div>
+{{end}}

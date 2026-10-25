@@ -1,0 +1,52 @@
+{{define "content"}}
+{{$csrf := .CSRF}}{{$f := .Form}}{{$editID := .EditID}}
+<header class="mb-6"><h1 class="text-[22px] leading-8 font-semibold tracking-[-0.01em]">Koneksi database</h1>
+  <p class="mt-1 text-sm text-muted">{{len .Connections}} database PostgreSQL target. Password disimpan terenkripsi dan tidak pernah ditampilkan.</p></header>
+{{template "flash" .}}
+{{with .Result}}{{if .OK}}<div class="{{if .Warning}}alert-warning{{else}}alert-success{{end}}" role="status"><span><strong class="font-medium">Koneksi berhasil.</strong> {{.Warning}}</span></div>{{end}}{{end}}
+<div class="grid gap-6 lg:grid-cols-[352px_minmax(0,1fr)] lg:items-start">
+  <form method="post" action="/admin/databases" class="well space-y-4">
+    <input type="hidden" name="csrf_token" value="{{$csrf}}">
+    {{if $editID}}<input type="hidden" name="id" value="{{$editID}}">{{end}}
+    <h2 class="text-base font-semibold">{{if $editID}}Edit {{$f.Name}}{{else}}Tambah koneksi{{end}}</h2>
+    <div class="grid grid-cols-2 gap-4">
+      <label class="col-span-2 block"><span class="label">Nama</span><input class="input" name="name" required maxlength="64" autocomplete="off" value="{{$f.Name}}"></label>
+      <label class="col-span-2 block"><span class="label">Host</span><input class="input" name="host" required autocomplete="off" value="{{$f.Host}}"></label>
+      <label class="block"><span class="label">Port</span><input class="input" name="port" type="number" min="1" max="65535" required value="{{$f.Port}}"></label>
+      <label class="block"><span class="label">Nama database</span><input class="input" name="dbName" required autocomplete="off" value="{{$f.DBName}}"></label>
+      <label class="block"><span class="label">Username</span><input class="input" name="username" required autocomplete="off" value="{{$f.Username}}"></label>
+      <label class="block"><span class="label">Password</span><input class="input" name="password" type="password" autocomplete="new-password">
+        {{if $editID}}<span class="mt-1.5 block text-xs text-muted">Kosong = tetap.</span>{{end}}</label>
+      <label class="col-span-2 block"><span class="label">SSL mode</span>
+        <select name="sslMode" class="select-form">{{range .SSLModes}}<option {{if eq . $f.SSLMode}}selected{{end}}>{{.}}</option>{{end}}</select></label>
+    </div>
+    <p class="text-xs text-muted">Test form memakai password yang diisi; untuk kredensial tersimpan gunakan tombol Test pada daftar.</p>
+    <div class="flex flex-wrap gap-2">
+      <button class="btn-primary">Simpan</button>
+      <button class="btn" formaction="/admin/databases/test" formnovalidate>{{icon "plug" 16}} Test form</button>
+      <a class="btn-ghost" href="/admin/databases">Batal</a>
+    </div>
+  </form>
+  <div class="min-w-0 overflow-x-auto">
+    {{if not .Connections}}<div class="empty"><span>Belum ada koneksi. Tambahkan database target lewat form di samping.</span></div>{{else}}
+    <table class="tbl min-w-[600px]">
+      <thead><tr><th class="th">Koneksi</th><th class="th">User</th><th class="th">Password</th><th class="th"><span class="sr-only">Aksi</span></th></tr></thead>
+      <tbody>
+      {{range .Connections}}
+      <tr class="{{if eq .ID $editID}}bg-raised{{end}}">
+        <td class="td h-16"><p class="font-medium">{{.Name}}</p><p class="ident text-muted">{{.Host}}:{{.Port}}/{{.DBName}} <span class="font-sans text-xs">· ssl {{.SSLMode}}</span></p></td>
+        <td class="td ident">{{.Username}}</td>
+        <td class="td">{{if .HasPassword}}<span class="pill-positive">Tersimpan</span>{{else}}<span class="text-muted">Tidak ada</span>{{end}}</td>
+        <td class="td"><div class="flex justify-end gap-1.5">
+          <a class="btn-sm" href="/admin/databases?edit={{.ID}}">{{icon "pencil" 13}} Edit</a>
+          <form method="post" action="/admin/databases/{{.ID}}/test"><input type="hidden" name="csrf_token" value="{{$csrf}}"><button class="btn-sm">{{icon "plug" 13}} Test</button></form>
+          <form method="post" action="/admin/databases/{{.ID}}/delete" onsubmit="return confirm({{printf "Hapus %s? Grant dan seluruh riwayat migration ikut dihapus." .Name}})">
+            <input type="hidden" name="csrf_token" value="{{$csrf}}"><button class="btn-sm-danger">{{icon "trash-2" 13}} Hapus</button></form>
+        </div></td>
+      </tr>
+      {{end}}
+      </tbody>
+    </table>{{end}}
+  </div>
+</div>
+{{end}}
