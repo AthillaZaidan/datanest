@@ -103,12 +103,7 @@ func (s *Service) runOnTarget(ctx context.Context, db *sql.DB, version int, migr
 	setup := []string{
 		`CREATE TABLE IF NOT EXISTS public.` + LedgerTable + ` (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`,
 	}
-	if s.opts.LockTimeout > 0 {
-		setup = append(setup, fmt.Sprintf("SET LOCAL lock_timeout = %d", s.opts.LockTimeout.Milliseconds()))
-	}
-	if s.opts.StatementTimeout > 0 {
-		setup = append(setup, fmt.Sprintf("SET LOCAL statement_timeout = %d", s.opts.StatementTimeout.Milliseconds()))
-	}
+	setup = append(setup, s.limits()...)
 	for _, q := range setup {
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return err
@@ -162,4 +157,16 @@ func failure(err error) (message, code string) {
 		return "Eksekusi melebihi batas waktu; perubahan di-rollback.", ""
 	}
 	return "Koneksi ke database target bermasalah; perubahan di-rollback.", ""
+}
+
+// limits are the per-transaction lock and statement timeouts for SQL from users.
+func (s *Service) limits() []string {
+	var out []string
+	if s.opts.LockTimeout > 0 {
+		out = append(out, fmt.Sprintf("SET LOCAL lock_timeout = %d", s.opts.LockTimeout.Milliseconds()))
+	}
+	if s.opts.StatementTimeout > 0 {
+		out = append(out, fmt.Sprintf("SET LOCAL statement_timeout = %d", s.opts.StatementTimeout.Milliseconds()))
+	}
+	return out
 }

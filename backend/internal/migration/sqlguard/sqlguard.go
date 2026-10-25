@@ -57,6 +57,14 @@ func tokens(sql string) []string {
 	return out
 }
 
+// FirstWord is the lower-case leading keyword of a statement, ignoring comments.
+func FirstWord(stmt string) string {
+	if w := tokens(stmt); len(w) > 0 {
+		return w[0]
+	}
+	return ""
+}
+
 // Split cuts sql into statements at top-level semicolons, keeping each statement's text as written.
 func Split(sql string) []string {
 	var out []string
