@@ -120,7 +120,7 @@ for (const box of document.querySelectorAll('[data-editor]')) {
   {{$analyze := .Analyze}}
   {{range $i, $p := .Plans}}
   <div class="rounded-lg bg-raised p-3">
-    <p class="mb-2 flex items-baseline gap-2 text-xs text-muted"><span class="font-medium text-ink">Statement {{add $i 1}}</span><code class="truncate font-mono text-[12px]">{{$p.SQL}}</code></p>
+    <p class="mb-2 flex items-baseline gap-2 text-xs text-muted"><span class="flex-none font-medium text-ink">Statement {{add $i 1}}</span><code class="truncate font-mono text-[12px]">{{$p.SQL}}</code></p>
     {{with $p.Error}}<div class="alert-error mb-0" role="alert">{{.}}</div>{{end}}
     {{with $p.Note}}<p class="small">{{.}}</p>{{end}}
     {{if $p.Explained}}
@@ -131,7 +131,7 @@ for (const box of document.querySelectorAll('[data-editor]')) {
         <tbody>
         {{range $p.Nodes}}
         <tr>
-          <td class="td pl-3"><span style="padding-left: {{mul .Depth 16}}px" class="inline-block font-medium">{{.NodeType}}{{with .Operation}} <span class="font-normal text-muted">({{.}})</span>{{end}}{{with .Strategy}} <span class="font-normal text-muted">{{.}}</span>{{end}}</span></td>
+          <td class="td pl-3 whitespace-nowrap"><span style="padding-left: {{mul .Depth 16}}px" class="inline-block font-medium">{{.NodeType}}{{with .Operation}} <span class="font-normal text-muted">({{.}})</span>{{end}}{{with .Strategy}} <span class="font-normal text-muted">{{.}}</span>{{end}}</span></td>
           <td class="td ident">{{.Relation}}{{with .Index}} <span class="text-muted">using</span> {{.}}{{end}}</td>
           <td class="td">{{.JoinType}}</td>
           <td class="td num text-right">{{num .StartupCost}}..{{num .TotalCost}}</td>
