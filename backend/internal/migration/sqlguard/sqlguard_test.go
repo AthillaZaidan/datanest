@@ -16,3 +16,23 @@ func TestCheckAllowsProtectedWords(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitStatements(t *testing.T) {
+	sql := "CREATE TABLE t (a text DEFAULT ';');\n-- skip; this\nINSERT INTO t VALUES ('x;y');\n" +
+		"CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END $$ LANGUAGE plpgsql;\n  ;\nSELECT * FROM t"
+	got := Split(sql)
+	want := []string{
+		"CREATE TABLE t (a text DEFAULT ';')",
+		"-- skip; this\nINSERT INTO t VALUES ('x;y')",
+		"CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END $$ LANGUAGE plpgsql",
+		"SELECT * FROM t",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d statements: %q", len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("statement %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

@@ -411,7 +411,27 @@ direkonsiliasi: bila versinya ada di `_platform_migrations` statusnya menjadi `s
 database target tidak dapat dihubungi, migration tetap `running`, kegagalannya dicatat di log, server tetap berjalan, dan
 rekonsiliasi diulang pada startup berikutnya.
 
-### 10. Penghapusan data
+### 10. Bonus: analisis execution plan
+
+Halaman migration menyediakan **Analisis execution plan** untuk SQL yang tersimpan, sebelum maupun sesudah dijalankan.
+
+- SQL dipecah per statement dengan tokenizer `sqlguard`, sehingga `;` di dalam string, komentar, dan body dollar-quoted
+  tidak memotong statement.
+- Seluruh statement dijalankan berurutan dalam **satu transaction yang selalu di-rollback**. Statement yang dapat
+  dianalisis (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `WITH`, `VALUES`, `TABLE`, `MERGE`) dijalankan sebagai
+  `EXPLAIN (FORMAT JSON)`. Statement lain, misalnya DDL, dijalankan apa adanya agar statement berikutnya dapat dianalisis;
+  contohnya `INSERT` ke table yang dibuat di migration yang sama.
+- Hasil setiap statement ditampilkan sebagai pohon plan: jenis node dan scan, relation dan index yang dipakai, jenis join,
+  estimasi cost (startup..total), dan estimasi jumlah baris.
+- **ANALYZE** (opsional) menambahkan jumlah baris aktual, waktu aktual per node, loops, serta waktu planning dan eksekusi.
+  Karena ANALYZE benar-benar menjalankan query (lalu di-rollback), opsi ini membutuhkan akses **EDIT**; `EXPLAIN` biasa
+  cukup akses **VIEW**.
+- Statement yang gagal menampilkan pesan error PostgreSQL beserta SQLSTATE, dan statement sesudahnya dilewati. `sqlguard`
+  menolak perintah kontrol transaction sebelum analisis, dan batas `lock_timeout`, `statement_timeout`, serta
+  `MIGRATION_EXEC_TIMEOUT` yang sama dengan eksekusi tetap berlaku.
+- Batasan: efek di luar transaction tidak ikut di-rollback, misalnya nilai sequence yang terpakai oleh `INSERT` saat ANALYZE.
+
+### 11. Penghapusan data
 
 Semua penghapusan adalah hard delete dengan `ON DELETE CASCADE`, kecuali referensi user di riwayat migration.
 
@@ -421,7 +441,7 @@ Semua penghapusan adalah hard delete dengan `ON DELETE CASCADE`, kecuali referen
 | Group | Keanggotaan dan grant; anggotanya langsung kehilangan akses lewat group tersebut. |
 | Koneksi database | Grant dan seluruh riwayat migration database itu; pool koneksinya ditutup. |
 
-### 11. Kontrak API dan format error
+### 12. Kontrak API dan format error
 
 Semua endpoint berada di bawah `/api` dan memakai JSON `camelCase`; waktu dalam RFC 3339. Route admin berada di
 `/api/admin/*`, dan grant serta keanggotaan memakai `PUT` agar idempotent.
@@ -450,7 +470,7 @@ Setiap error memakai bentuk yang sama:
 | 500 | `INTERNAL_ERROR` (tanpa detail internal; detailnya hanya di log) |
 | 502 / 504 | `TARGET_DB_UNAVAILABLE` / `TARGET_DB_TIMEOUT` |
 
-### 12. Strategi pengujian
+### 13. Strategi pengujian
 
 - **Unit test** di samping kode yang diuji, untuk logika padat aturan: `authz`, `sqlguard`, session store (dengan jam yang
   dapat diinjeksi), enkripsi kredensial, pagination, pemetaan error, dan konfigurasi.
@@ -459,10 +479,11 @@ Setiap error memakai bentuk yang sama:
   form tanpa token CSRF, explorer, penolakan VIEW, alur buat-jalankan migration, halaman admin), login, logout, timeout
   dan rotasi session, CSRF dan `Origin`, seed admin, CRUD admin dan penolakan non-admin, akses efektif multi-group, IDOR,
   uji koneksi (termasuk kredensial salah dan peringatan superuser), explorer read-only, eksekusi sukses, multi-statement dan
-  function, rollback, statement non-transaksional, concurrency, lock timeout, dan rekonsiliasi.
+  function, rollback, statement non-transaksional, concurrency, lock timeout, rekonsiliasi, dan analisis execution plan
+  (EXPLAIN dan ANALYZE di-rollback, ANALYZE hanya untuk EDIT).
 - Setiap fitur diuji untuk alur berhasil, gagal, dan penolakan akses **(spek)**. Semua test dijalankan dengan race detector.
 
-### 13. Batasan yang disengaja
+### 14. Batasan yang disengaja
 
 - **Session in-memory:** restart backend mengeluarkan semua pengguna, dan backend harus berjalan sebagai satu instance
   (lock migration per database juga berada di memori proses).
@@ -476,5 +497,5 @@ Setiap error memakai bentuk yang sama:
   dapat bergeser setelah `UPDATE` atau `VACUUM FULL`.
 - **Ikon dan font** dimuat dari CDN (jsDelivr dan Google Fonts). Tanpa internet, halaman tetap berfungsi dengan font sistem,
   tetapi ikon tidak tampil.
-- Di luar lingkup milestone ini: DBMS selain PostgreSQL, schema diff, analisis `EXPLAIN`, re-authentication, rate limiting
-  login, dan pagination di halaman admin.
+- Di luar lingkup milestone ini: DBMS selain PostgreSQL, schema diff dan migration generation, re-authentication, rate
+  limiting login, dan pagination di halaman admin.

@@ -36,61 +36,11 @@ func Check(sql string) error {
 func tokens(sql string) []string {
 	var out []string
 	for i := 0; i < len(sql); {
+		if j := skip(sql, i); j != i {
+			i = j
+			continue
+		}
 		switch {
-		case strings.HasPrefix(sql[i:], "--"):
-			i += 2
-			for i < len(sql) && sql[i] != '\n' {
-				i++
-			}
-		case strings.HasPrefix(sql[i:], "/*"):
-			i += 2
-			depth := 1
-			for i < len(sql) && depth > 0 {
-				if strings.HasPrefix(sql[i:], "/*") {
-					depth++
-					i += 2
-				} else if strings.HasPrefix(sql[i:], "*/") {
-					depth--
-					i += 2
-				} else {
-					i++
-				}
-			}
-		case sql[i] == '\'':
-			i++
-			for i < len(sql) {
-				if sql[i] == '\'' {
-					i++
-					if i < len(sql) && sql[i] == '\'' {
-						i++
-						continue
-					}
-					break
-				}
-				i++
-			}
-		case sql[i] == '"':
-			i++
-			for i < len(sql) {
-				if sql[i] == '"' {
-					i++
-					if i < len(sql) && sql[i] == '"' {
-						i++
-						continue
-					}
-					break
-				}
-				i++
-			}
-		case sql[i] == '$':
-			if end := dollarEnd(sql, i); end != "" {
-				i += len(end)
-				if close := strings.Index(sql[i:], end); close >= 0 {
-					i += close + len(end)
-				}
-				continue
-			}
-			i++
 		case sql[i] == ';':
 			out = append(out, ";")
 			i++
@@ -106,6 +56,89 @@ func tokens(sql string) []string {
 	}
 	return out
 }
+
+// FirstWord is the lower-case leading keyword of a statement, ignoring comments.
+func FirstWord(stmt string) string {
+	if w := tokens(stmt); len(w) > 0 {
+		return w[0]
+	}
+	return ""
+}
+
+// Split cuts sql into statements at top-level semicolons, keeping each statement's text as written.
+func Split(sql string) []string {
+	var out []string
+	start := 0
+	add := func(end int) {
+		if piece := strings.TrimSpace(sql[start:end]); piece != "" {
+			out = append(out, piece)
+		}
+	}
+	for i := 0; i < len(sql); {
+		if j := skip(sql, i); j != i {
+			i = j
+			continue
+		}
+		if sql[i] == ';' {
+			add(i)
+			start = i + 1
+		}
+		i++
+	}
+	add(len(sql))
+	return out
+}
+
+// skip returns the index after a comment, quoted string, quoted identifier or dollar-quoted body starting at i,
+// or i itself when none starts there.
+func skip(sql string, i int) int {
+	switch {
+	case strings.HasPrefix(sql[i:], "--"):
+		i += 2
+		for i < len(sql) && sql[i] != '\n' {
+			i++
+		}
+	case strings.HasPrefix(sql[i:], "/*"):
+		i += 2
+		depth := 1
+		for i < len(sql) && depth > 0 {
+			if strings.HasPrefix(sql[i:], "/*") {
+				depth++
+				i += 2
+			} else if strings.HasPrefix(sql[i:], "*/") {
+				depth--
+				i += 2
+			} else {
+				i++
+			}
+		}
+	case sql[i] == '\'' || sql[i] == '"':
+		q := sql[i]
+		i++
+		for i < len(sql) {
+			if sql[i] == q {
+				i++
+				if i < len(sql) && sql[i] == q {
+					i++
+					continue
+				}
+				break
+			}
+			i++
+		}
+	case sql[i] == '$':
+		if end := dollarEnd(sql, i); end != "" {
+			i += len(end)
+			if close := strings.Index(sql[i:], end); close >= 0 {
+				i += close + len(end)
+			} else {
+				i = len(sql)
+			}
+		}
+	}
+	return i
+}
+
 func isWord(b byte) bool { return b == '_' || unicode.IsLetter(rune(b)) || unicode.IsDigit(rune(b)) }
 func dollarEnd(sql string, i int) string {
 	j := i + 1

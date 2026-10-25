@@ -344,11 +344,22 @@ func (h *Handler) createMigration(c *gin.Context) {
 }
 
 func (h *Handler) migration(c *gin.Context) {
-	h.showMigration(c, id(c, "id"), "", "")
+	h.showMigration(c, id(c, "id"), "", "", nil)
+}
+
+// explainMigration plans the saved SQL in a rolled-back transaction and shows the result under the editor.
+func (h *Handler) explainMigration(c *gin.Context) {
+	analyze := c.PostForm("analyze") == "1"
+	plans, err := h.Migrations.Explain(c.Request.Context(), h.uid(c), id(c, "id"), analyze)
+	if err != nil {
+		h.showMigration(c, id(c, "id"), "", msgOf(err), nil)
+		return
+	}
+	h.showMigration(c, id(c, "id"), "", "", gin.H{"Plans": plans, "Analyze": analyze})
 }
 
 // showMigration renders one migration; draftSQL keeps unsaved edits on screen after a failed save.
-func (h *Handler) showMigration(c *gin.Context, migrationID uint, draftSQL, msg string) {
+func (h *Handler) showMigration(c *gin.Context, migrationID uint, draftSQL, msg string, extra gin.H) {
 	ctx, uid := c.Request.Context(), h.uid(c)
 	m, err := h.Migrations.Get(ctx, uid, migrationID)
 	if err != nil {
@@ -371,6 +382,9 @@ func (h *Handler) showMigration(c *gin.Context, migrationID uint, draftSQL, msg 
 	data := gin.H{"Title": title, "DB": db, "M": m, "SQL": sql, "CanEdit": db.MyLevel == "EDIT", "Subtitle": subtitle(m)}
 	if msg != "" {
 		data["Error"] = msg
+	}
+	for k, v := range extra {
+		data[k] = v
 	}
 	if errors.Is(errFromQuery(c), apperr.ErrRevisionConflict) {
 		data["Conflict"] = true
@@ -410,7 +424,7 @@ func (h *Handler) saveMigration(c *gin.Context) {
 			c.Redirect(http.StatusSeeOther, withQuery(fmt.Sprintf("/migrations/%d?conflict=1", mID), "err", msgOf(err)))
 			return
 		}
-		h.showMigration(c, mID, sql, msgOf(err))
+		h.showMigration(c, mID, sql, msgOf(err), nil)
 		return
 	}
 	c.Redirect(http.StatusSeeOther, fmt.Sprintf("/migrations/%d", mID))

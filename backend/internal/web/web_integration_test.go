@@ -266,3 +266,40 @@ func TestLogoutEndsSession(t *testing.T) {
 		t.Fatalf("old session still works: %d", w.Code)
 	}
 }
+
+func TestExplainFromMigrationPage(t *testing.T) {
+	e := setup(t)
+	editor := e.login("editor")
+	w := editor.post("/databases/"+itoa(e.dbID)+"/migrations", url.Values{"sql": {"CREATE TABLE extra (id int);\nSELECT * FROM produk WHERE id = 1;"}})
+	loc := w.Header().Get("Location")
+	contains(t, editor.get(loc), "Analisis")
+
+	viewer := e.login("viewer")
+	plain := viewer.post(loc+"/explain", nil)
+	if plain.Code != http.StatusOK {
+		t.Fatalf("explain: %d", plain.Code)
+	}
+	contains(t, plain, "Hasil analisis", "tidak dapat dianalisis", "produk", "Cost")
+	if strings.Contains(plain.Body.String(), "Waktu aktual") {
+		t.Fatal("plain EXPLAIN shows actual times")
+	}
+	contains(t, viewer.post(loc+"/explain", url.Values{"analyze": {"1"}}), "Anda tidak memiliki akses.")
+	contains(t, editor.post(loc+"/explain", url.Values{"analyze": {"1"}}), "Hasil analisis", "Waktu aktual", "di-rollback")
+	contains(t, editor.get("/databases/"+itoa(e.dbID)), "produk")
+	if strings.Contains(editor.get("/databases/"+itoa(e.dbID)).Body.String(), ">extra<") {
+		t.Fatal("explain kept the DDL")
+	}
+}
+
+func TestUnknownPageRendersFully(t *testing.T) {
+	e := setup(t)
+	anon := e.do("GET", "/nope", "", nil)
+	if anon.Code != http.StatusNotFound || !strings.Contains(anon.Body.String(), "</html>") {
+		t.Fatalf("anonymous 404 cut short: %d", anon.Code)
+	}
+	c := e.login("editor")
+	w := c.get("/nope")
+	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "</html>") || !strings.Contains(w.Body.String(), "editor") {
+		t.Fatalf("signed-in 404: %d", w.Code)
+	}
+}
