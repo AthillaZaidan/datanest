@@ -1,0 +1,119 @@
+{{define "content"}}
+{{$canEdit := eq .DB.MyLevel "EDIT"}}
+<header class="mb-6 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+  <div class="min-w-0">
+    <div class="flex flex-wrap items-center gap-2">
+      <h1 class="text-[22px] leading-8 font-semibold tracking-[-0.01em]">{{.Title}}</h1>
+      {{with .M}}{{status .Status}}{{end}}
+    </div>
+    <p class="mt-1 text-sm text-muted">{{if .New}}Draft untuk {{.DB.Name}}, dibuat di atas versi schema {{if .DB.CurrentVersion}}v{{.DB.CurrentVersion}}{{else}}awal{{end}}. Draft bisa ditinjau sebelum dijalankan.{{else}}{{.Subtitle}}{{end}}</p>
+  </div>
+</header>
+
+{{if not $canEdit}}<div class="alert-info" role="status">Anda punya akses View ke database ini: migration bisa dibaca, tetapi tidak bisa diubah atau dijalankan.</div>{{end}}
+{{with .Error}}<div class="alert-error" role="alert"><div class="min-w-0 flex-1">{{.}}</div>{{if $.Conflict}}<a class="btn-sm" href="/migrations/{{$.M.ID}}">Muat ulang</a>{{end}}</div>{{end}}
+{{with .M}}{{if and (eq .Status "draft") .BaseOutdated}}<div class="alert-warning" role="status">Database sudah berubah sejak draft ini dibuat (dibuat saat versi {{version .BaseVersion}}). Tinjau ulang SQL sebelum dijalankan.</div>{{end}}{{end}}
+
+{{if .New}}
+  {{if $canEdit}}
+  <form method="post" action="/databases/{{.DB.ID}}/migrations" class="max-w-[960px]">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    {{template "editor" (dict "SQL" .SQL "ReadOnly" false)}}
+    <div class="mt-4 flex items-center gap-3">
+      <button class="btn-primary" data-needs-sql>{{icon "save" 16}} Simpan draft</button>
+      <span class="small">Satu migration dijalankan dalam satu transaction. BEGIN, COMMIT, dan ROLLBACK tidak diperlukan.</span>
+    </div>
+  </form>
+  {{end}}
+{{else}}
+{{$m := .M}}{{$draft := eq .M.Status "draft"}}
+<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_288px] lg:items-start">
+  <div class="min-w-0 space-y-4">
+    <form method="post" action="/migrations/{{$m.ID}}" id="save">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <input type="hidden" name="revision" value="{{$m.Revision}}">
+      {{template "editor" (dict "SQL" .SQL "Saved" $m.SQL "ReadOnly" (or (not $draft) (not $canEdit)))}}
+    </form>
+    {{if and (eq $m.Status "failed") $m.ErrorMessage}}
+    <div class="rounded-lg bg-neg-bg px-4 py-3 text-sm text-neg-ink">
+      <p class="font-medium">Error dari PostgreSQL{{with $m.ErrorCode}} <span class="font-mono font-normal">SQLSTATE {{.}}</span>{{end}}</p>
+      <pre class="mt-1 font-mono text-[13px] whitespace-pre-wrap">{{$m.ErrorMessage}}</pre>
+    </div>
+    {{end}}
+    {{if eq $m.Status "running"}}<p class="muted">Migration sedang berjalan…</p>{{end}}
+    {{if $canEdit}}
+    <div class="flex flex-wrap items-center gap-2">
+      {{if $draft}}
+        <button class="btn" form="save" data-needs-change>{{icon "save" 16}} Simpan</button>
+        <form method="post" action="/migrations/{{$m.ID}}/execute" onsubmit="return confirm('Jalankan migration ini pada database target?')">
+          <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+          <button class="btn-primary" data-blocked-by-change>{{icon "play" 16}} Jalankan</button>
+        </form>
+        <span class="small hidden" data-dirty-note>Ada perubahan yang belum disimpan.</span>
+        <form method="post" action="/migrations/{{$m.ID}}/delete" class="ml-auto" onsubmit="return confirm('Hapus draft ini?')">
+          <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+          <button class="btn-danger">{{icon "trash-2" 16}} Hapus</button>
+        </form>
+      {{end}}
+      {{if or (eq $m.Status "failed") (eq $m.Status "success")}}
+        <form method="post" action="/migrations/{{$m.ID}}/duplicate">
+          <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+          <button class="btn">{{icon "copy" 16}} Duplikat jadi draft baru</button>
+        </form>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+  <aside>
+    <h2 class="mb-1 text-base font-semibold">Detail</h2>
+    <dl>
+      {{template "meta" (dict "Label" "Database" "Value" .DB.Name)}}
+      <div class="flex items-baseline justify-between gap-4 border-t border-rule py-2.5 first:border-t-0"><dt class="text-sm text-muted">Versi</dt><dd class="text-right text-sm">{{if $m.Version}}<span class="font-mono">{{version $m.Version}}</span>{{else}}<span class="text-muted">diberi saat dijalankan</span>{{end}}</dd></div>
+      <div class="flex items-baseline justify-between gap-4 border-t border-rule py-2.5"><dt class="text-sm text-muted">Versi dasar</dt><dd class="text-right font-mono text-sm">{{version $m.BaseVersion}}</dd></div>
+      <div class="flex items-baseline justify-between gap-4 border-t border-rule py-2.5"><dt class="text-sm text-muted">Dibuat</dt><dd class="text-right text-sm">{{$m.CreatedBy}}<span class="block text-xs text-muted">{{time $m.CreatedAt}}</span></dd></div>
+      {{if $m.UpdatedBy}}<div class="flex items-baseline justify-between gap-4 border-t border-rule py-2.5"><dt class="text-sm text-muted">Terakhir diubah</dt><dd class="text-right text-sm">{{$m.UpdatedBy}}<span class="block text-xs text-muted">{{time $m.UpdatedAt}}</span></dd></div>{{end}}
+      {{if $m.ExecutedBy}}<div class="flex items-baseline justify-between gap-4 border-t border-rule py-2.5"><dt class="text-sm text-muted">Dijalankan</dt><dd class="text-right text-sm">{{$m.ExecutedBy}}<span class="block text-xs text-muted">{{time $m.StartedAt}}</span></dd></div>{{end}}
+      {{if $m.FinishedAt}}<div class="flex items-baseline justify-between gap-4 border-t border-rule py-2.5"><dt class="text-sm text-muted">Durasi</dt><dd class="num text-right text-sm">{{duration $m.StartedAt $m.FinishedAt}}</dd></div>{{end}}
+      <div class="flex items-baseline justify-between gap-4 border-t border-rule py-2.5"><dt class="text-sm text-muted">Revisi</dt><dd class="num text-right text-sm">{{$m.Revision}}</dd></div>
+    </dl>
+  </aside>
+</div>
+{{end}}
+<script>
+// Line numbers follow the text; Save needs a change, Run needs everything saved.
+for (const box of document.querySelectorAll('[data-editor]')) {
+  const area = box.querySelector('textarea'), gutter = box.querySelector('[data-gutter]'), count = box.querySelector('[data-count]')
+  const saved = area.dataset.saved
+  const sync = () => {
+    const n = area.value.split('\n').length
+    gutter.innerHTML = Array.from({ length: Math.max(n, 12) }, (_, i) => '<div>' + (i + 1) + '</div>').join('')
+    if (count) count.textContent = n + ' baris'
+    const dirty = saved !== undefined && area.value !== saved
+    document.querySelectorAll('[data-needs-change]').forEach(b => b.disabled = !dirty || !area.value.trim())
+    document.querySelectorAll('[data-blocked-by-change]').forEach(b => { b.disabled = dirty; b.title = dirty ? 'Simpan perubahan dulu' : '' })
+    document.querySelectorAll('[data-dirty-note]').forEach(n => n.classList.toggle('hidden', !dirty))
+    document.querySelectorAll('[data-needs-sql]').forEach(b => b.disabled = !area.value.trim())
+  }
+  area.addEventListener('input', sync)
+  area.addEventListener('scroll', () => { gutter.scrollTop = area.scrollTop })
+  sync()
+}
+</script>
+{{end}}
+
+{{define "meta"}}<div class="flex items-baseline justify-between gap-4 border-t border-rule py-2.5 first:border-t-0"><dt class="text-sm text-muted">{{.Label}}</dt><dd class="text-right text-sm">{{.Value}}</dd></div>{{end}}
+
+{{define "editor"}}
+<div data-editor class="overflow-hidden rounded-lg border border-line focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20">
+  <div class="flex h-9 items-center justify-between border-b border-line bg-raised px-3 text-xs text-muted">
+    <span class="font-mono">migration.sql</span>
+    {{if .ReadOnly}}<span class="inline-flex items-center gap-1">{{icon "lock" 12}} hanya baca</span>{{else}}<span class="num" data-count>{{lines .SQL}} baris</span>{{end}}
+  </div>
+  <div class="flex bg-sheet">
+    <div data-gutter aria-hidden="true" class="num h-80 w-11 flex-none overflow-hidden bg-raised py-3 pr-2.5 text-right font-mono text-xs leading-6 text-muted select-none">{{range seq (max (lines .SQL) 12)}}<div>{{.}}</div>{{end}}</div>
+    <textarea name="sql" aria-label="SQL migration" spellcheck="false" wrap="off" {{if .ReadOnly}}readonly{{end}} {{if .Saved}}data-saved="{{.Saved}}"{{end}}
+      placeholder="ALTER TABLE products ADD COLUMN sku text;"
+      class="h-80 min-w-0 flex-1 resize-none bg-sheet px-3 py-3 font-mono text-[13px] leading-6 text-ink placeholder:text-muted focus:outline-none read-only:text-neutral-ink">{{.SQL}}</textarea>
+  </div>
+</div>
+{{end}}

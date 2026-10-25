@@ -1,0 +1,130 @@
+{{define "head"}}<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{with .Title}}{{.}} · {{end}}Datanest</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lucide-static@0.460.0/font/lucide.css">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+{{end}}
+
+{{define "mark"}}<i class="icon-database leading-none text-accent" style="font-size:{{.}}px" aria-hidden="true"></i>{{end}}
+
+{{define "wordmark"}}<a href="/databases" class="flex items-center gap-2 rounded-md focus-visible:outline-2 focus-visible:outline-accent">{{template "mark" 22}}<span class="text-[15px] font-semibold tracking-[-0.01em]">Datanest</span></a>{{end}}
+
+{{define "nav"}}
+<nav class="flex flex-col gap-0.5" aria-label="Navigasi utama">
+  <a href="/databases" class="{{if or (active .Path "/databases") (active .Path "/migrations")}}nav-on{{else}}nav{{end}}">{{icon "database" 16}}Databases</a>
+  {{if .User.IsAdmin}}
+  <p class="mt-6 mb-1.5 px-2.5 text-xs text-muted">Administrasi</p>
+  <a href="/admin/users" class="{{if active .Path "/admin/users"}}nav-on{{else}}nav{{end}}">{{icon "user" 16}}Users</a>
+  <a href="/admin/groups" class="{{if active .Path "/admin/groups"}}nav-on{{else}}nav{{end}}">{{icon "users" 16}}Groups</a>
+  <a href="/admin/databases" class="{{if active .Path "/admin/databases"}}nav-on{{else}}nav{{end}}">{{icon "server" 16}}Koneksi database</a>
+  {{end}}
+</nav>
+{{end}}
+
+{{define "account"}}
+<div class="flex items-center gap-2.5">
+  <span class="grid size-7 flex-none place-items-center rounded-full text-xs font-semibold uppercase" style="{{tint .User.ID}}">{{initial .User.Username}}</span>
+  <div class="leading-tight">
+    <p class="text-sm font-medium">{{.User.Username}}</p>
+    <p class="text-xs text-muted">{{if .User.IsAdmin}}Platform Admin{{else}}User{{end}}</p>
+  </div>
+  <form method="post" action="/logout" class="ml-1">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <button class="btn-sm-ghost" title="Logout" aria-label="Logout">{{icon "log-out" 16}}</button>
+  </form>
+</div>
+{{end}}
+
+{{define "breadcrumb"}}
+<ol class="flex min-w-0 items-center gap-1.5 overflow-hidden text-sm">
+  {{$n := len .}}
+  {{range $i, $c := .}}
+    {{if $i}}<li aria-hidden="true" class="text-control {{if le $i (add $n -2)}}hidden sm:block{{end}}">/</li>{{end}}
+    <li class="min-w-0 {{if eq $i (add $n -1)}}text-ink{{else}}text-muted{{end}} {{if lt $i (add $n -2)}}hidden sm:block{{end}}" {{if eq $i (add $n -1)}}aria-current="page"{{end}}>
+      {{if and $c.To (ne $i (add $n -1))}}<a href="{{$c.To}}" class="truncate hover:text-ink {{if $c.Mono}}font-mono text-[13px]{{end}}">{{$c.Label}}</a>{{else}}<span class="truncate {{if $c.Mono}}font-mono text-[13px]{{end}}">{{$c.Label}}</span>{{end}}
+    </li>
+  {{end}}
+</ol>
+{{end}}
+
+{{define "flash"}}
+{{with .Error}}<div class="alert-error" role="alert">{{.}}</div>{{end}}
+{{with .Notice}}<div class="alert-success" role="status">{{.}}</div>{{end}}
+{{end}}
+
+{{define "page"}}{{template "head" .}}
+<body>
+<!--
+  Shell: one tinted L-frame (228px sidebar + 48px top bar, no rule between them) around a white sheet inset 8px
+  from the window's right and bottom edges. Below 1024px the frame folds into a 48px bar with a menu.
+-->
+<div class="flex h-dvh flex-col lg:grid lg:grid-cols-[228px_minmax(0,1fr)] lg:grid-rows-[48px_minmax(0,1fr)]">
+  <div class="hidden items-center px-4 lg:flex">{{template "wordmark"}}</div>
+  <header class="flex h-12 flex-none items-center gap-3 px-4 lg:px-6">
+    <details class="lg:hidden">
+      <summary class="btn-sm-ghost -ml-1 size-9 list-none" aria-label="Buka menu">{{icon "menu" 18}}</summary>
+      <div class="fixed inset-0 z-50 flex flex-col bg-frame" role="dialog" aria-label="Menu">
+        <div class="flex h-12 items-center justify-between px-4">
+          {{template "wordmark"}}
+          <button type="button" class="btn-sm-ghost size-9" onclick="this.closest('details').open=false" aria-label="Tutup menu">{{icon "x" 18}}</button>
+        </div>
+        <div class="flex-1 overflow-y-auto px-3 pt-2">{{template "nav" .}}</div>
+        <div class="border-t border-line px-4 py-3">{{template "account" .}}</div>
+      </div>
+    </details>
+    <span class="lg:hidden">{{template "mark" 20}}</span>
+    {{template "breadcrumb" .Crumbs}}
+    <div class="ml-auto hidden lg:block">{{template "account" .}}</div>
+  </header>
+  <aside class="hidden px-3 pt-2 lg:block">{{template "nav" .}}</aside>
+  <main class="min-h-0 flex-1 overflow-y-auto bg-sheet lg:mr-2 lg:mb-2 lg:rounded-2xl lg:border lg:border-line">
+    <div class="mx-auto max-w-[1280px] px-4 py-5 sm:px-6 lg:py-6">
+      {{template "content" .}}
+    </div>
+  </main>
+</div>
+</body>
+</html>
+{{end}}
+
+{{define "header"}}
+<header class="mb-6 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+  <div class="min-w-0">
+    <div class="flex flex-wrap items-center gap-2">
+      <h1 class="text-[22px] leading-8 font-semibold tracking-[-0.01em]">{{.Title}}</h1>
+      {{with .Badge}}{{.}}{{end}}
+    </div>
+    {{with .Subtitle}}<p class="mt-1 text-sm text-muted">{{.}}</p>{{end}}
+  </div>
+</header>
+{{end}}
+
+{{define "rail"}}
+{{if not .Steps}}
+  <p class="text-sm text-muted">Belum ada migration yang dijalankan{{if .Drafts}}, {{.Drafts}} draft menunggu{{end}}.</p>
+{{else}}
+<div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+  {{if .Hidden}}<span class="text-xs text-muted">+{{.Hidden}} sebelumnya</span>{{end}}
+  <ol class="flex items-start overflow-x-auto" aria-label="Versi schema">
+    {{$n := len .Steps}}{{$cur := .Current}}
+    {{range $i, $s := .Steps}}
+    <li class="relative flex w-11 flex-none flex-col items-center">
+      {{if gt $n 1}}<span aria-hidden="true" class="absolute top-[6px] h-px bg-control {{if eq $i 0}}right-0 left-1/2{{else if eq $i (add $n -1)}}right-1/2 left-0{{else}}inset-x-0{{end}}"></span>{{end}}
+      <a href="/migrations/{{$s.ID}}" class="relative z-10 grid size-3.5 place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-accent" title="v{{$s.Version}} {{$s.Label}}" aria-label="v{{$s.Version}}, {{$s.Label}}">
+        <span class="block rounded-full {{$s.Dot}}"></span>
+      </a>
+      <span class="mt-1.5 font-mono text-xs {{if eq $s.Version $cur}}font-medium text-ink{{else}}text-muted{{end}}">v{{$s.Version}}</span>
+    </li>
+    {{end}}
+  </ol>
+  {{if .Drafts}}<span class="text-xs text-muted">{{.Drafts}} draft belum dijalankan</span>{{end}}
+</div>
+{{end}}
+{{end}}

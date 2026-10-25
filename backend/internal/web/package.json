@@ -1,0 +1,12 @@
+{
+  "name": "datanest-web-css",
+  "private": true,
+  "scripts": {
+    "css": "tailwindcss -i tailwind.css -o static/app.css --minify",
+    "css:watch": "tailwindcss -i tailwind.css -o static/app.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "tailwindcss": "4.3.3"
+  }
+}

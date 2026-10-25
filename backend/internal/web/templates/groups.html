@@ -1,0 +1,87 @@
+{{define "content"}}
+{{$csrf := .CSRF}}{{$sel := .Selected}}{{$edit := .EditGroup}}
+<header class="mb-6"><h1 class="text-[22px] leading-8 font-semibold tracking-[-0.01em]">Groups</h1>
+  <p class="mt-1 text-sm text-muted">{{len .Groups}} group. Akses database diberikan ke group; level tertinggi dari semua group user yang berlaku.</p></header>
+{{template "flash" .}}
+<div class="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)] lg:items-start">
+  <div class="space-y-6">
+    <form method="post" action="/admin/groups" class="well space-y-4">
+      <input type="hidden" name="csrf_token" value="{{$csrf}}">
+      {{with $edit}}<input type="hidden" name="id" value="{{.ID}}">{{end}}
+      <h2 class="text-base font-semibold">{{if $edit}}Edit {{$edit.Name}}{{else}}Buat group{{end}}</h2>
+      <label class="block"><span class="label">Nama</span><input class="input" name="name" required maxlength="64" value="{{with $edit}}{{.Name}}{{end}}"></label>
+      <label class="block"><span class="label">Deskripsi</span><input class="input" name="description" value="{{with $edit}}{{.Description}}{{end}}"></label>
+      <div class="flex gap-2 pt-1"><button class="btn-primary">Simpan</button><a class="btn" href="/admin/groups">Batal</a></div>
+    </form>
+    <section>
+      <h2 class="mb-2 flex min-h-8 items-center text-base font-semibold">Semua group<span class="num ml-2 text-sm font-normal text-muted">{{len .Groups}}</span></h2>
+      {{if not .Groups}}<div class="empty"><span>Belum ada group.</span></div>{{else}}
+      <ul class="space-y-0.5">
+        {{range .Groups}}
+        <li class="flex items-center gap-1 rounded-lg pr-1 {{if and $sel (eq $sel.ID .ID)}}bg-active{{else}}hover:bg-raised{{end}}">
+          <a href="/admin/groups?group={{.ID}}" class="min-w-0 flex-1 rounded-lg px-2.5 py-2" {{if and $sel (eq $sel.ID .ID)}}aria-current="true"{{end}}>
+            <span class="block truncate text-sm font-medium">{{.Name}}</span>
+            {{with .Description}}<span class="block truncate text-xs text-muted">{{.}}</span>{{end}}
+          </a>
+          <a class="btn-sm-ghost" href="/admin/groups?group={{.ID}}&edit={{.ID}}" title="Edit" aria-label="Edit {{.Name}}">{{icon "pencil" 14}}</a>
+          <form method="post" action="/admin/groups/{{.ID}}/delete" onsubmit="return confirm({{printf "Hapus group %s beserta membership dan grant?" .Name}})">
+            <input type="hidden" name="csrf_token" value="{{$csrf}}"><button class="btn-sm-ghost hover:text-negative" title="Hapus" aria-label="Hapus {{.Name}}">{{icon "trash-2" 14}}</button>
+          </form>
+        </li>
+        {{end}}
+      </ul>{{end}}
+    </section>
+  </div>
+
+  {{if not $sel}}
+    <div class="empty"><span>Buat group dulu untuk mengatur anggota dan grant database.</span></div>
+  {{else}}
+  <div class="min-w-0 space-y-10">
+    <section>
+      <h2 class="mb-2 flex min-h-8 items-center text-base font-semibold">Anggota {{$sel.Name}}<span class="num ml-2 text-sm font-normal text-muted">{{len .Members}}</span></h2>
+      <form method="post" action="/admin/groups/{{$sel.ID}}/members" class="mb-2 flex flex-wrap gap-2">
+        <input type="hidden" name="csrf_token" value="{{$csrf}}">
+        <select name="uid" class="select min-w-48 flex-1 sm:max-w-80" required aria-label="User">
+          <option value="">Pilih user</option>{{range .Others}}<option value="{{.ID}}">{{.Username}}</option>{{end}}
+        </select>
+        <button class="btn-primary">Tambah anggota</button>
+      </form>
+      {{if not .Members}}<div class="empty"><span>Group ini belum punya anggota.</span></div>{{else}}
+      <ul>
+        {{range .Members}}
+        <li class="flex h-12 items-center gap-3 border-t border-rule">
+          <span class="grid size-7 flex-none place-items-center rounded-full text-xs font-semibold uppercase" style="{{tint .ID}}">{{initial .Username}}</span>
+          <span class="flex-1 font-medium">{{.Username}}</span>
+          {{if .IsAdmin}}<span class="text-xs text-muted">Platform Admin</span>{{end}}
+          <form method="post" action="/admin/groups/{{$sel.ID}}/members/{{.ID}}/delete"><input type="hidden" name="csrf_token" value="{{$csrf}}"><button class="btn-sm-danger">Keluarkan</button></form>
+        </li>
+        {{end}}
+      </ul>{{end}}
+    </section>
+    <section>
+      <h2 class="mb-2 flex min-h-8 items-center text-base font-semibold">Grant database<span class="num ml-2 text-sm font-normal text-muted">{{len .Grants}}</span></h2>
+      {{$editGrant := .EditGrant}}
+      <form method="post" action="/admin/groups/{{$sel.ID}}/grants" class="mb-2 flex flex-wrap gap-2">
+        <input type="hidden" name="csrf_token" value="{{$csrf}}">
+        <select name="did" class="select min-w-48 flex-1 sm:max-w-80" required aria-label="Database">
+          <option value="">Pilih database</option>{{range .Databases}}<option value="{{.ID}}" {{if eq .ID $editGrant}}selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+        <select name="level" class="select" aria-label="Level"><option>VIEW</option><option>EDIT</option></select>
+        <button class="btn-primary">Simpan grant</button>
+      </form>
+      {{if not .Grants}}<div class="empty"><span>Group ini belum punya grant ke database mana pun.</span></div>{{else}}
+      <ul>
+        {{range .Grants}}
+        <li class="flex h-14 items-center gap-3 border-t border-rule">
+          <div class="min-w-0 flex-1"><p class="font-medium">{{.DB.Name}}</p><p class="ident truncate text-muted">{{.DB.Host}}:{{.DB.Port}}/{{.DB.DBName}}</p></div>
+          <span class="pill-neutral">{{.Level}}</span>
+          <a class="btn-sm" href="/admin/groups?group={{$sel.ID}}&grant={{.DatabaseID}}">Edit</a>
+          <form method="post" action="/admin/groups/{{$sel.ID}}/grants/{{.DatabaseID}}/delete"><input type="hidden" name="csrf_token" value="{{$csrf}}"><button class="btn-sm-danger">Cabut</button></form>
+        </li>
+        {{end}}
+      </ul>{{end}}
+    </section>
+  </div>
+  {{end}}
+</div>
+{{end}}

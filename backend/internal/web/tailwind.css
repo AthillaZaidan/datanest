@@ -1,0 +1,77 @@
+/* Regenerate static/app.css after editing templates: bunx @tailwindcss/cli -i tailwind.css -o static/app.css --minify */
+@import "tailwindcss";
+@source "./templates";
+@source "./web.go";
+
+/* framed-sheet tokens. The frame takes a low-chroma blue-grey from PostgreSQL's blue; the sheet stays white. */
+@theme {
+  --font-sans: "IBM Plex Sans", Inter, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-frame: #f1f4f7;
+  --color-sheet: #ffffff;
+  --color-raised: #f4f6f8;
+  --color-active: #e2e7ec;
+  --color-line: #e8eaec;
+  --color-rule: #f0f1f2;
+  --color-control: #cdced1;
+  --color-ink: #131416;
+  --color-muted: #5d5f60;
+  --color-accent: #1b6c80;
+  --color-positive: #1e7b4f;
+  --color-negative: #c4242a;
+  --color-warning: #92400e;
+  --color-pos-bg: #dcfae5;
+  --color-pos-ink: #04250e;
+  --color-neg-bg: #ffedea;
+  --color-neg-ink: #831c1e;
+  --color-warn-bg: #fffbeb;
+  --color-warn-line: #fde68a;
+  --color-neutral-bg: #ebedee;
+  --color-neutral-ink: #353736;
+}
+
+:root { color-scheme: light; }
+body { @apply bg-frame font-sans text-sm text-ink antialiased; }
+.num { font-variant-numeric: tabular-nums; }
+
+
+@utility ctl { @apply inline-flex items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:pointer-events-none disabled:opacity-50; }
+@utility field { @apply rounded-lg border border-line bg-sheet text-sm text-ink placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none disabled:bg-raised; }
+@utility pill { @apply inline-flex h-5 flex-none items-center rounded px-1.5 text-xs font-medium whitespace-nowrap; }
+@utility alert { @apply mb-4 flex flex-wrap items-center gap-3 rounded-lg px-3 py-2.5 text-sm; }
+
+/* Shared controls, the same class lists the React screens used. */
+@layer components {
+  .btn { @apply ctl h-8 border border-control bg-sheet px-3 text-sm text-ink hover:bg-raised active:bg-active; }
+  .btn-primary { @apply ctl h-8 bg-ink px-3 text-sm text-white hover:bg-[#2b2d30] active:bg-black; }
+  .btn-danger { @apply ctl h-8 border border-control bg-sheet px-3 text-sm text-negative hover:bg-neg-bg; }
+  .btn-ghost { @apply ctl h-8 px-3 text-sm text-muted hover:bg-raised hover:text-ink active:bg-active; }
+  .btn-sm { @apply ctl h-7 border border-control bg-sheet px-2 text-xs text-ink hover:bg-raised active:bg-active; }
+  .btn-sm-danger { @apply ctl h-7 border border-control bg-sheet px-2 text-xs text-negative hover:bg-neg-bg; }
+  .btn-sm-ghost { @apply ctl h-7 px-2 text-xs text-muted hover:bg-raised hover:text-ink active:bg-active; }
+  .input { @apply field block h-10 w-full px-3; }
+  .select { @apply field h-8 border-control pr-8 pl-2.5; }
+  .select-form { @apply field block h-10 w-full pr-8 pl-3; }
+  .label { @apply mb-2 block text-sm font-medium; }
+  .well { @apply rounded-lg bg-raised p-4; }
+  .tbl { @apply w-full border-collapse text-left text-sm; }
+  .th { @apply h-10 px-3 text-xs font-normal whitespace-nowrap text-muted first:pl-0 last:pr-0; }
+  .td { @apply h-12 border-t border-rule px-3 align-middle first:pl-0 last:pr-0; }
+  .ident { @apply font-mono text-[13px]; }
+  .muted { @apply text-sm text-muted; }
+  .small { @apply text-xs text-muted; }
+  .pill-neutral { @apply pill bg-neutral-bg text-neutral-ink; }
+  .pill-positive { @apply pill bg-pos-bg text-pos-ink; }
+  .pill-negative { @apply pill bg-neg-bg text-neg-ink; }
+  .pill-warning { @apply pill bg-warn-bg text-warning; }
+  .alert-error { @apply alert bg-neg-bg text-neg-ink; }
+  .alert-warning { @apply alert border border-warn-line bg-warn-bg text-warning; }
+  .alert-success { @apply alert bg-pos-bg text-pos-ink; }
+  .alert-info { @apply alert bg-raised text-ink; }
+  .empty { @apply flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed border-control px-4 py-3 text-sm text-muted; }
+  .tab { @apply -mb-px flex h-9 flex-none items-center gap-1.5 border-b-2 border-transparent text-sm text-muted transition-colors hover:text-ink; }
+  .tab-on { @apply -mb-px flex h-9 flex-none items-center gap-1.5 border-b-2 border-ink text-sm font-semibold text-ink; }
+  .nav { @apply flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-sm text-muted transition-colors hover:bg-active/60 hover:text-ink; }
+  .nav-on { @apply flex h-8 items-center gap-2.5 rounded-lg bg-active px-2.5 text-sm text-ink; }
+}

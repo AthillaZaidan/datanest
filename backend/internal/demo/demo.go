@@ -12,16 +12,15 @@ import (
 )
 
 type Account struct {
-	Username string
-	Password string
-	Admin    bool
+	Username, Password string
+	Admin              bool
+	Role, Access       string // shown on the login page
 }
 
-// Accounts must match frontend/src/dev/demoAccounts.ts.
 var Accounts = []Account{
-	{Username: "demo-admin", Password: "demoadmin123", Admin: true},
-	{Username: "developer", Password: "developer123"},
-	{Username: "reviewer", Password: "reviewer123"},
+	{Username: "demo-admin", Password: "demoadmin123", Admin: true, Role: "Platform Admin", Access: "Kelola user, group, koneksi; tanpa akses database"},
+	{Username: "developer", Password: "developer123", Role: "Edit toko, View kampus", Access: "Menulis dan menjalankan migration"},
+	{Username: "reviewer", Password: "reviewer123", Role: "View toko dan kampus", Access: "Membaca schema dan data"},
 }
 
 // The databases created by docker/target-init.sql.

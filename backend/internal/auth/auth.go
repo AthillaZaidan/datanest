@@ -51,36 +51,57 @@ func (s *Service) Login(c *gin.Context) {
 		respond(c, apperr.ErrValidation.WithDetails(map[string]string{"username": "username dan password wajib diisi"}))
 		return
 	}
+	u, err := s.Verify(input.Username, input.Password)
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	csrf, admin, err := s.StartSession(c, u.ID)
+	if err != nil {
+		respond(c, apperr.ErrInternal)
+		return
+	}
+	c.JSON(http.StatusOK, loginResponse{User: UserResponse{ID: u.ID, Username: u.Username, IsAdmin: admin}, CSRFToken: csrf})
+}
+
+// Verify checks a username and password. Unknown users still pay for a bcrypt comparison so timing does not reveal them.
+func (s *Service) Verify(username, password string) (models.User, error) {
 	var u models.User
-	err := s.DB.Where("username = ?", input.Username).First(&u).Error
+	err := s.DB.Where("username = ?", username).First(&u).Error
 	hash := []byte(u.PasswordHash)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		hash = dummyHash
 	}
-	if err != nil || bcrypt.CompareHashAndPassword(hash, []byte(input.Password)) != nil {
-		respond(c, apperr.ErrInvalidCredentials)
-		return
+	if err != nil || bcrypt.CompareHashAndPassword(hash, []byte(password)) != nil {
+		return models.User{}, apperr.ErrInvalidCredentials
 	}
-	raw, sess, err := s.Sessions.Create(u.ID)
+	return u, nil
+}
+
+// StartSession always creates a new session (no fixation) and sets its cookie.
+func (s *Service) StartSession(c *gin.Context, userID uint) (csrf string, admin bool, err error) {
+	raw, sess, err := s.Sessions.Create(userID)
 	if err != nil {
-		respond(c, apperr.ErrInternal)
-		return
+		return "", false, err
 	}
-	admin, err := s.isAdmin(u.ID)
-	if err != nil {
-		respond(c, apperr.ErrInternal)
-		return
+	if admin, err = s.IsAdmin(userID); err != nil {
+		return "", false, err
 	}
 	s.setCookie(c, raw)
-	c.JSON(http.StatusOK, loginResponse{User: UserResponse{ID: u.ID, Username: u.Username, IsAdmin: admin}, CSRFToken: sess.CSRFToken})
+	return sess.CSRFToken, admin, nil
 }
 
 func (s *Service) Logout(c *gin.Context) {
+	s.EndSession(c)
+	c.Status(http.StatusNoContent)
+}
+
+// EndSession revokes the current session, including identifiers still in grace, and clears the cookie.
+func (s *Service) EndSession(c *gin.Context) {
 	if raw, err := c.Cookie(CookieName); err == nil {
 		s.Sessions.Revoke(raw)
 	}
 	http.SetCookie(c.Writer, &http.Cookie{Name: CookieName, Value: "", Path: "/", HttpOnly: true, Secure: s.CookieSecure, SameSite: http.SameSiteStrictMode, MaxAge: -1})
-	c.Status(http.StatusNoContent)
 }
 func (s *Service) Me(c *gin.Context) {
 	id, ok := reqctx.UserID(c)
@@ -93,7 +114,7 @@ func (s *Service) Me(c *gin.Context) {
 		respond(c, apperr.ErrUnauthenticated)
 		return
 	}
-	admin, err := s.isAdmin(id)
+	admin, err := s.IsAdmin(id)
 	if err != nil {
 		respond(c, apperr.ErrInternal)
 		return
@@ -103,34 +124,48 @@ func (s *Service) Me(c *gin.Context) {
 }
 
 func (s *Service) RequireAuth(c *gin.Context) {
-	raw, err := c.Cookie(CookieName)
-	if err != nil {
+	sess, ok := s.Authenticate(c)
+	if !ok {
 		respond(c, apperr.ErrUnauthenticated)
 		return
 	}
-	sess, replacement, err := s.Sessions.Validate(raw)
-	if err != nil {
-		respond(c, apperr.ErrUnauthenticated)
-		return
-	}
-	if replacement != "" {
-		s.setCookie(c, replacement)
-	}
-	reqctx.SetUserID(c, sess.UserID)
-	c.Set("datanest.csrf", sess.CSRFToken)
 	if stateChanging(c.Request.Method) && !constantEqual(c.GetHeader("X-CSRF-Token"), sess.CSRFToken) {
 		respond(c, apperr.ErrCSRFInvalid)
 		return
 	}
 	c.Next()
 }
+
+// Authenticate validates the session cookie, sends a rotated identifier when due, and stores the user in the context.
+func (s *Service) Authenticate(c *gin.Context) (*session.Session, bool) {
+	raw, err := c.Cookie(CookieName)
+	if err != nil {
+		return nil, false
+	}
+	sess, replacement, err := s.Sessions.Validate(raw)
+	if err != nil {
+		return nil, false
+	}
+	if replacement != "" {
+		s.setCookie(c, replacement)
+	}
+	reqctx.SetUserID(c, sess.UserID)
+	c.Set("datanest.csrf", sess.CSRFToken)
+	return sess, true
+}
+
+// CSRFMatches compares a submitted token with the session's in constant time.
+func CSRFMatches(token string, sess *session.Session) bool {
+	return constantEqual(token, sess.CSRFToken)
+}
+
 func (s *Service) RequireAdmin(c *gin.Context) {
 	id, ok := reqctx.UserID(c)
 	if !ok {
 		respond(c, apperr.ErrUnauthenticated)
 		return
 	}
-	admin, err := s.isAdmin(id)
+	admin, err := s.IsAdmin(id)
 	if err != nil {
 		respond(c, apperr.ErrInternal)
 		return
@@ -153,14 +188,16 @@ func ValidateStateRequest(allowedOrigin string) gin.HandlerFunc {
 			respond(c, apperr.ErrOriginNotAllowed)
 			return
 		}
-		if !strings.HasPrefix(strings.ToLower(c.GetHeader("Content-Type")), "application/json") {
+		ct := strings.ToLower(c.GetHeader("Content-Type"))
+		form := !strings.HasPrefix(c.Request.URL.Path, "/api/") && strings.HasPrefix(ct, "application/x-www-form-urlencoded")
+		if !form && !strings.HasPrefix(ct, "application/json") {
 			respond(c, apperr.ErrUnsupportedMediaType)
 			return
 		}
 		c.Next()
 	}
 }
-func (s *Service) isAdmin(userID uint) (bool, error) {
+func (s *Service) IsAdmin(userID uint) (bool, error) {
 	var n int64
 	err := s.DB.Model(&models.UserRole{}).Joins("JOIN roles ON roles.id = user_roles.role_id").Where("user_roles.user_id = ? AND roles.name = ?", userID, models.RolePlatformAdmin).Count(&n).Error
 	return n > 0, err

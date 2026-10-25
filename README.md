@@ -17,8 +17,8 @@ Platform manajemen database PostgreSQL: kontrol akses lewat group, database expl
 ## Kebutuhan
 
 - Go 1.25+
-- Bun 1.2+
-- Docker (Docker Desktop di macOS/Windows), dengan port 15432, 15433, 15434, 8080, dan 5173 kosong
+- Bun 1.2+ (hanya untuk membangun ulang CSS setelah mengubah template)
+- Docker (Docker Desktop di macOS/Windows), dengan port 15432, 15433, 15434, dan 8080 kosong
 
 Ada tiga database PostgreSQL di `docker-compose.yml`:
 
@@ -64,21 +64,18 @@ Seed membuat tiga akun (lihat [Akun demo](#akun-demo)), koneksi ke `toko` dan `k
 
 Seed bersifat opsional. Tanpa seed, isi `ADMIN_PASSWORD` di `.env`; server membuat satu Platform Admin `ADMIN_USERNAME` dari situ saat pertama start, lalu semua user, group, koneksi, dan grant dibuat lewat halaman admin.
 
-**4. Jalankan backend** (terminal pertama).
+**4. Jalankan aplikasi.**
 
 ```bash
-cd backend && go run ./cmd/server
+cd backend && SHOW_DEMO_ACCOUNTS=true go run ./cmd/server
 ```
 
-Backend berjalan di http://localhost:8080 dan membuat atau memperbarui table platform secara otomatis. Cek dengan `curl localhost:8080/api/healthz`.
+Backend menyajikan halaman HTML sekaligus JSON API di http://localhost:8080, dan membuat atau memperbarui table platform secara
+otomatis. `SHOW_DEMO_ACCOUNTS=true` menampilkan daftar akun demo di halaman login; hilangkan untuk menyembunyikannya.
 
-**5. Jalankan frontend** (terminal kedua).
-
-```bash
-cd frontend && bun install && bun run dev
-```
-
-**6. Buka http://localhost:5173.** Selalu pakai alamat ini persis: request dari origin lain (misalnya `127.0.0.1:5173`) ditolak oleh pemeriksaan `Origin`, sehingga login, simpan, dan logout gagal dengan 403. Di halaman login ada daftar **Akun demo**; klik satu untuk mengisi form, lalu **Masuk**.
+**5. Buka http://localhost:8080.** Selalu pakai alamat ini persis: request dari origin lain (misalnya `127.0.0.1:8080`) ditolak
+oleh pemeriksaan `Origin`, sehingga login, simpan, dan logout gagal dengan 403. Di halaman login, klik salah satu **Akun demo**
+untuk mengisi form, lalu **Masuk**.
 
 ## Akun demo
 
@@ -90,7 +87,7 @@ Dibuat oleh `go run ./cmd/seed`:
 | `developer` | `developer123` | Group Tim Developer: EDIT `toko`, VIEW `kampus`. Bisa membuat dan menjalankan migration di `toko`. |
 | `reviewer` | `reviewer123` | Group Tim Reviewer: VIEW `toko` dan `kampus`. Hanya membaca schema, data, dan riwayat. |
 
-Daftar akun di halaman login hanya tampil saat `bun run dev` (`frontend/src/dev/demoAccounts.ts`, di balik `import.meta.env.DEV`), sehingga tidak ikut ke build production. Akun yang sama didefinisikan di `backend/internal/demo/demo.go`; ubah keduanya bersamaan. Jangan jalankan seed ke database platform sungguhan.
+Daftar akun di halaman login hanya tampil bila server dijalankan dengan `SHOW_DEMO_ACCOUNTS=true`. Akun didefinisikan di `backend/internal/demo/demo.go`. Jangan jalankan seed ke database platform sungguhan, dan jangan aktifkan `SHOW_DEMO_ACCOUNTS` di luar demo lokal.
 
 Alur demo singkat:
 
@@ -104,8 +101,8 @@ Backend membaca `backend/.env` lalu `.env` di root repo; variabel environment ya
 
 | Variabel | Default lokal | Keterangan |
 | --- | --- | --- |
-| `APP_PORT` | `8080` | Port backend. Jika diubah, jalankan frontend dengan `VITE_API_TARGET=http://localhost:<port> bun run dev`. |
-| `ALLOWED_ORIGIN` | `http://localhost:5173` | Satu-satunya origin yang boleh mengirim request pengubah data. Harus sama persis dengan alamat yang dibuka di browser. |
+| `APP_PORT` | `8080` | Port aplikasi. Jika diubah, sesuaikan `ALLOWED_ORIGIN`. |
+| `ALLOWED_ORIGIN` | `http://localhost:8080` | Satu-satunya origin yang boleh mengirim request pengubah data. Harus sama persis dengan alamat yang dibuka di browser. |
 | `COOKIE_SECURE` | `false` | `true` hanya bila disajikan lewat HTTPS. |
 | `PLATFORM_DSN` | `postgres://datanest:datanest@localhost:15432/datanest_platform?sslmode=disable` | Database platform (`platform-pg`). Wajib. |
 | `ADMIN_USERNAME` | `admin` | Username Platform Admin pertama, dibuat hanya bila belum ada admin sama sekali. |
@@ -116,6 +113,7 @@ Backend membaca `backend/.env` lalu `.env` di root repo; variabel environment ya
 | `SESSION_ROTATION_INTERVAL` | `15m` | Identifier session diganti secara berkala. |
 | `SESSION_GRACE_PERIOD` | `30s` | Identifier lama masih diterima sesaat setelah rotasi. Urutannya harus grace < rotation < idle < absolute. |
 | `SESSION_CLEANUP_INTERVAL` | `1m` | Seberapa sering session kedaluwarsa dibersihkan dari memori. |
+| `SHOW_DEMO_ACCOUNTS` | kosong | `true` menampilkan akun demo di halaman login. Hanya untuk demo lokal. |
 | `TARGET_QUERY_TIMEOUT` | `5s` | Batas waktu koneksi dan query explorer ke database target. |
 | `MIGRATION_LOCK_TIMEOUT` | `5s` | `lock_timeout` saat migration berjalan. |
 | `MIGRATION_STATEMENT_TIMEOUT` | `60s` | `statement_timeout` per statement migration. |
@@ -133,11 +131,7 @@ docker compose up -d --wait
 ```
 
 ```bash
-cd backend && go run ./cmd/server
-```
-
-```bash
-cd frontend && bun run dev
+cd backend && SHOW_DEMO_ACCOUNTS=true go run ./cmd/server
 ```
 
 Session hanya ada di memori server: setiap restart backend semua pengguna harus login lagi.
@@ -152,11 +146,7 @@ cd backend && go test -race ./...
 cd backend && set -a && . ../.env && set +a && go test -race -tags=integration -p 1 ./...
 ```
 
-```bash
-cd frontend && bun run build && bun run lint
-```
-
-Perintah pertama menjalankan unit test. Perintah kedua juga menjalankan integration test ke `test-pg` (container harus menyala); `-p 1` wajib karena semua package memakai database test yang sama. Perintah ketiga memeriksa TypeScript, build production, dan lint frontend.
+Perintah pertama menjalankan unit test. Perintah kedua juga menjalankan integration test ke `test-pg` (container harus menyala); `-p 1` wajib karena semua package memakai database test yang sama.
 
 ## Reset dan troubleshooting
 
@@ -164,7 +154,7 @@ Perintah pertama menjalankan unit test. Perintah kedua juga menjalankan integrat
 | --- | --- |
 | Server berhenti dengan pesan `CREDENTIALS_KEY` | Kunci kosong atau bukan 32 byte base64. Buat dengan `openssl rand -base64 32`. |
 | Server berhenti: `ADMIN_USERNAME and ADMIN_PASSWORD are required` | Belum ada Platform Admin. Jalankan seed, atau isi `ADMIN_PASSWORD`. |
-| Login, simpan, atau logout gagal 403 | Aplikasi dibuka dari origin selain `ALLOWED_ORIGIN`. Buka http://localhost:5173. |
+| Login, simpan, atau logout gagal 403 | Aplikasi dibuka dari origin selain `ALLOWED_ORIGIN`. Buka http://localhost:8080. |
 | `address already in use` | Port dipakai proses lain. Cari dengan `lsof -i :8080` (atau port lain), hentikan prosesnya. |
 | Koneksi database gagal saat Test | `target-pg` belum menyala, atau password koneksi dienkripsi dengan kunci lama. Nyalakan Docker; isi ulang password atau jalankan seed. |
 | Database target tidak berisi table contoh | Volume dibuat sebelum `docker/target-init.sql` diperbarui. Reset volume (di bawah). |
@@ -177,8 +167,17 @@ docker compose down -v
 
 ## Konvensi
 
-- Frontend memakai Bun (`bun add`, `bun run ...`), bukan npm.
-- Styling memakai utility class Tailwind CSS v4; class bersama ada di `frontend/src/components/ui.ts` dan komponen bersama di `frontend/src/components/kit.tsx`. Hindari file CSS baru.
+- Halaman ada di `backend/internal/web`: handler di `web.go`, `pages.go`, dan `admin.go`, template di `templates/`.
+- Styling memakai utility class Tailwind CSS v4; class bersama (`btn`, `input`, `tbl`, `pill-*`, dll.) didefinisikan di
+  `backend/internal/web/tailwind.css`. Setelah mengubah template atau CSS, bangun ulang `static/app.css` (hasilnya di-commit,
+  sehingga menjalankan aplikasi tidak membutuhkan Bun):
+
+```bash
+cd backend/internal/web && bun install && bun run css
+```
+
+- Ikon memakai icon font Lucide (`lucide-static`) melalui CDN, ditulis sebagai `{{icon "database" 16}}` di template.
+- Tooling CSS memakai Bun, bukan npm.
 
 ## Keputusan desain
 
@@ -192,8 +191,8 @@ ditandai **(spek)**; selebihnya adalah pilihan tim.
 | Backend | Go **(spek)** dengan Gin | Router ringan dengan middleware yang mudah disusun per kelompok route. |
 | Database platform | PostgreSQL melalui GORM | Data platform (user, group, grant, koneksi, riwayat) berupa relasi biasa; ORM mempercepat CRUD dan migrasi schema platform. |
 | Database target | PostgreSQL **(spek)** melalui `database/sql` + pgx | Introspeksi katalog dan eksekusi SQL pengguna ditulis manual; ini bukan pekerjaan ORM. |
-| Frontend | React + Vite + TypeScript (SPA), Tailwind CSS | Spesifikasi membebaskan frontend. SPA memisahkan API JSON dari tampilan. |
-| Origin | Satu origin | Saat development, Vite meneruskan `/api` ke backend. Cookie dapat memakai `SameSite=Strict` tanpa CORS. |
+| Tampilan | Server-side rendering dengan Go `html/template`, Tailwind CSS, icon font Lucide | Spesifikasi dan Q&A asisten: frontend Milestone 1 tidak boleh SPA. Halaman dirender backend dan memanggil service yang sama dengan JSON API, sehingga logika dan otorisasi tidak ditulis dua kali. JavaScript hanya dipakai untuk konfirmasi dan kenyamanan editor; semua aksi tetap berupa form biasa. |
+| Origin | Satu origin | Halaman dan JSON API (`/api`) disajikan oleh server yang sama, sehingga cookie dapat memakai `SameSite=Strict` tanpa CORS. |
 
 Database platform dan database target selalu berada di server terpisah, sehingga migration yang dijalankan pengguna tidak
 dapat menyentuh table internal platform.
@@ -215,13 +214,14 @@ Request → middleware (Origin + Content-Type → RequireAuth + CSRF → Require
 | `dbconn` | Koneksi database target: enkripsi kredensial, pool, uji koneksi. |
 | `explorer` | Schema, table, column, constraint, index, dan data (read-only). |
 | `migration` | Draft, eksekusi transaksional, `sqlguard`, lock per database, rekonsiliasi. |
-| `httpapi` | Router, handler, dan pemetaan error ke JSON. |
+| `httpapi` | Router JSON API, handler, dan pemetaan error ke JSON. |
+| `web` | Halaman HTML server-rendered: login, explorer, migration, dan administrasi. |
 | `apperr` | Tipe error aplikasi dan daftar kode error. |
 
 **Pemisahan keputusan dan penegakan akses (spek).** Aturan "siapa boleh melakukan apa" hanya ada di package `authz`.
 Middleware memeriksa identitas (sudah login atau belum) dan status Platform Admin. Pemeriksaan akses per database dilakukan
 di service **setelah** resource dimuat, sehingga `databaseId` yang diperiksa adalah milik resource sebenarnya, bukan nilai
-dari URL. Ini mencegah IDOR, misalnya mengeksekusi migration milik database lain lewat `/api/migrations/:id`. Frontend
+dari URL. Ini mencegah IDOR, misalnya mengeksekusi migration milik database lain lewat `/migrations/:id`. Halaman
 menyembunyikan tombol hanya untuk kenyamanan; seluruh penegakan akses ada di backend **(spek)**. Prinsipnya *deny by
 default*: aksi yang tidak dikenal dan kegagalan lookup akses selalu ditolak.
 
@@ -288,14 +288,16 @@ lock, sehingga dua request paralel tidak menghasilkan dua penerus.
 ### 5. Perlindungan CSRF
 
 - **Synchronizer token (spek: perlindungan CSRF).** Token 32 byte acak, berbeda dari session identifier, dibuat saat login
-  dan disimpan di session. Frontend menerimanya dari `POST /api/auth/login` dan `GET /api/auth/me`, menyimpannya hanya di
-  memori, dan mengirimnya di header `X-CSRF-Token` pada setiap `POST`, `PUT`, `PATCH`, dan `DELETE`. Perbandingan dilakukan
-  secara constant-time; token tidak berubah saat rotasi agar request dalam grace period tetap valid.
+  dan disimpan di session. Setiap form di halaman membawanya sebagai field tersembunyi `csrf_token`; klien JSON API
+  menerimanya dari `POST /api/auth/login` dan `GET /api/auth/me` lalu mengirimnya di header `X-CSRF-Token`. Setiap
+  `POST`, `PUT`, `PATCH`, dan `DELETE` diperiksa dengan perbandingan constant-time; token tidak berubah saat rotasi agar
+  request dalam grace period tetap valid.
 - **Pemeriksaan `Origin`:** request pengubah state dari origin selain `ALLOWED_ORIGIN` ditolak `403 ORIGIN_NOT_ALLOWED`.
   Bersama kewajiban JSON, ini juga menangkal login CSRF, saat token belum tersedia.
-- **Wajib `Content-Type: application/json`** pada setiap request pengubah state (`415` bila tidak). Form HTML lintas situs
-  tidak dapat mengirim JSON, dan `fetch` JSON lintas situs memicu preflight yang tidak diizinkan.
-- Semua `GET` bebas efek samping; logout dan eksekusi migration selalu `POST`.
+- **Jenis body dibatasi:** JSON API hanya menerima `application/json` (`415` bila tidak), sehingga form lintas situs tidak dapat
+  memanggilnya. Halaman menerima form `application/x-www-form-urlencoded`, yang selalu wajib membawa token CSRF.
+- Semua `GET` bebas efek samping; logout, hapus, dan eksekusi migration selalu `POST`, dan setiap form mengikuti pola
+  post/redirect/get.
 
 ### 6. Otorisasi dan akses efektif
 
@@ -453,7 +455,8 @@ Setiap error memakai bentuk yang sama:
 - **Unit test** di samping kode yang diuji, untuk logika padat aturan: `authz`, `sqlguard`, session store (dengan jam yang
   dapat diinjeksi), enkripsi kredensial, pagination, pemetaan error, dan konfigurasi.
 - **Integration test** (build tag `integration`) terhadap PostgreSQL sungguhan di `test-pg`, sebagian besar melalui router
-  Gin dengan `httptest` tanpa menyalakan server, sesuai contoh di spesifikasi. Cakupannya meliputi login, logout, timeout
+  Gin dengan `httptest` tanpa menyalakan server, sesuai contoh di spesifikasi. Cakupannya meliputi halaman HTML (login, redirect pengunjung anonim,
+  form tanpa token CSRF, explorer, penolakan VIEW, alur buat-jalankan migration, halaman admin), login, logout, timeout
   dan rotasi session, CSRF dan `Origin`, seed admin, CRUD admin dan penolakan non-admin, akses efektif multi-group, IDOR,
   uji koneksi (termasuk kredensial salah dan peringatan superuser), explorer read-only, eksekusi sukses, multi-statement dan
   function, rollback, statement non-transaksional, concurrency, lock timeout, dan rekonsiliasi.
@@ -471,7 +474,7 @@ Setiap error memakai bentuk yang sama:
   boleh diubah manual.
 - **Table tanpa primary key** diurutkan berdasarkan `ctid` saat dipaginasi. Urutannya stabil selama data tidak berubah, tetapi
   dapat bergeser setelah `UPDATE` atau `VACUUM FULL`.
-- **Penyajian frontend:** frontend dijalankan melalui dev server Vite. Untuk deployment, hasil `bun run build` perlu
-  disajikan dari origin yang sama dengan backend, misalnya lewat reverse proxy.
+- **Ikon dan font** dimuat dari CDN (jsDelivr dan Google Fonts). Tanpa internet, halaman tetap berfungsi dengan font sistem,
+  tetapi ikon tidak tampil.
 - Di luar lingkup milestone ini: DBMS selain PostgreSQL, schema diff, analisis `EXPLAIN`, re-authentication, rate limiting
   login, dan pagination di halaman admin.
