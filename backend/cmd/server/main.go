@@ -77,8 +77,9 @@ func run() error {
 	databaseService := dbconn.New(db, credentialCipher, pools, az, cfg.Target.QueryTimeout)
 	explorerService := explorer.New(db, pools, az, cfg.Target.QueryTimeout)
 	migrationService := migration.New(db, pools, az, migration.Options{LockTimeout: cfg.Target.MigrationLockTimeout, StatementTimeout: cfg.Target.MigrationStatementTimeout, ExecTimeout: cfg.Target.MigrationExecTimeout})
+	// An unreachable target leaves its migration running for the next start; it must not keep the platform down.
 	if err := migrationService.Reconcile(context.Background()); err != nil {
-		return err
+		log.Printf("reconcile: %v", err)
 	}
 	srv := &http.Server{
 		Addr: ":" + cfg.AppPort,
