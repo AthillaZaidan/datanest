@@ -12,6 +12,7 @@ Platform manajemen database PostgreSQL: kontrol akses lewat group, database expl
 - [Test](#test)
 - [Reset dan troubleshooting](#reset-dan-troubleshooting)
 - [Konvensi](#konvensi)
+- [Keputusan desain](#keputusan-desain)
 
 ## Kebutuhan
 
@@ -179,19 +180,298 @@ docker compose down -v
 - Frontend memakai Bun (`bun add`, `bun run ...`), bukan npm.
 - Styling memakai utility class Tailwind CSS v4; class bersama ada di `frontend/src/components/ui.ts` dan komponen bersama di `frontend/src/components/kit.tsx`. Hindari file CSS baru.
 
-## Session dan keamanan request
+## Keputusan desain
 
-Session disimpan hanya di memori server: restart server mengeluarkan seluruh pengguna dan deployment harus single-instance. Identifier session berupa 32 byte acak, dikirim hanya melalui cookie `sid` dengan `HttpOnly`, `SameSite=Strict`, `Path=/`, dan `Secure` saat `COOKIE_SECURE=true`. Server hanya menyimpan hash SHA-256 identifier.
+Bagian ini mencatat keputusan desain yang diambil tim beserta alasannya. Keputusan yang berasal langsung dari spesifikasi
+ditandai **(spek)**; selebihnya adalah pilihan tim.
 
-- Idle timeout: 30 menit, sesuai rentang OWASP untuk aplikasi berisiko rendah.
-- Absolute timeout: 8 jam, satu hari kerja dan tidak diperpanjang oleh rotasi.
-- Rotasi: setiap 15 menit atau ketika hak pengguna naik.
-- Grace period: 30 detik agar request yang berjalan saat rotasi tetap valid.
+### 1. Teknologi
 
-Setiap request pengubah state memerlukan `X-CSRF-Token` synchronizer token, JSON, serta `Origin` yang sesuai `ALLOWED_ORIGIN`. Token disimpan di memori frontend dan dikirim oleh API client. Login menggunakan bcrypt; password, token CSRF, serta session identifier tidak dicatat atau dikirim dalam response body. Platform Admin tidak otomatis mendapat akses database target—akses target tetap berasal dari grant group.
+| Aspek | Pilihan | Alasan |
+| --- | --- | --- |
+| Backend | Go **(spek)** dengan Gin | Router ringan dengan middleware yang mudah disusun per kelompok route. |
+| Database platform | PostgreSQL melalui GORM | Data platform (user, group, grant, koneksi, riwayat) berupa relasi biasa; ORM mempercepat CRUD dan migrasi schema platform. |
+| Database target | PostgreSQL **(spek)** melalui `database/sql` + pgx | Introspeksi katalog dan eksekusi SQL pengguna ditulis manual; ini bukan pekerjaan ORM. |
+| Frontend | React + Vite + TypeScript (SPA), Tailwind CSS | Spesifikasi membebaskan frontend. SPA memisahkan API JSON dari tampilan. |
+| Origin | Satu origin | Saat development, Vite meneruskan `/api` ke backend. Cookie dapat memakai `SameSite=Strict` tanpa CORS. |
 
-## Database explorer dan migrations
+Database platform dan database target selalu berada di server terpisah, sehingga migration yang dijalankan pengguna tidak
+dapat menyentuh table internal platform.
 
-Explorer hanya tersedia untuk pengguna dengan akses **VIEW** dan memakai transaction `READ ONLY`. Schema sistem serta tabel `_platform_migrations` disembunyikan; identifier dari URL selalu divalidasi terhadap katalog. Data mendukung pagination 10, 25, 50, atau 100 baris dan diurutkan konsisten dengan primary key (atau `ctid` bila tidak tersedia).
+### 2. Arsitektur
 
-Lifecycle migration adalah `draft → running → success | failed`. Pengguna **EDIT** dapat membuat, mengubah, menghapus, menduplikasi, dan menjalankan draft; riwayat yang sudah dieksekusi tidak dapat diubah. Versi diberi saat eksekusi dimulai sehingga urutannya linear per database. Eksekusi selalu dibungkus satu transaction dengan batas lock, statement, dan total waktu; migration gagal di-rollback serta tetap dicatat. Satu database hanya menjalankan satu migration secara bersamaan.
+```
+Request → middleware (Origin + Content-Type → RequireAuth + CSRF → RequireAdmin)
+        → handler (parse input, panggil service, petakan error)
+        → service (load resource → authz.Can → logika) → repository / database target
+```
+
+| Package | Tanggung jawab |
+| --- | --- |
+| `config` | Membaca dan memvalidasi environment; server menolak start bila konfigurasi wajib tidak valid. |
+| `auth`, `session` | Login, hashing password, seed admin, session in-memory, rotasi, CSRF. |
+| `authz` | Policy Decision Point: daftar aksi, level minimum, dan rumus akses efektif. |
+| `admin` | User, role, group, keanggotaan, dan grant. |
+| `dbconn` | Koneksi database target: enkripsi kredensial, pool, uji koneksi. |
+| `explorer` | Schema, table, column, constraint, index, dan data (read-only). |
+| `migration` | Draft, eksekusi transaksional, `sqlguard`, lock per database, rekonsiliasi. |
+| `httpapi` | Router, handler, dan pemetaan error ke JSON. |
+| `apperr` | Tipe error aplikasi dan daftar kode error. |
+
+**Pemisahan keputusan dan penegakan akses (spek).** Aturan "siapa boleh melakukan apa" hanya ada di package `authz`.
+Middleware memeriksa identitas (sudah login atau belum) dan status Platform Admin. Pemeriksaan akses per database dilakukan
+di service **setelah** resource dimuat, sehingga `databaseId` yang diperiksa adalah milik resource sebenarnya, bukan nilai
+dari URL. Ini mencegah IDOR, misalnya mengeksekusi migration milik database lain lewat `/api/migrations/:id`. Frontend
+menyembunyikan tombol hanya untuk kenyamanan; seluruh penegakan akses ada di backend **(spek)**. Prinsipnya *deny by
+default*: aksi yang tidak dikenal dan kegagalan lookup akses selalu ditolak.
+
+### 3. Autentikasi
+
+- Login memakai username dan password **(spek)**; tidak ada registrasi mandiri. User dibuat oleh Platform Admin.
+- Password disimpan sebagai hash **bcrypt** dengan salt bawaan **(spek)**. Password minimal 8 karakter dan maksimal 72 byte (batas input bcrypt).
+- Login yang gagal selalu menjawab `401 INVALID_CREDENTIALS` dengan pesan yang sama, baik username tidak dikenal maupun
+  password salah. Untuk username yang tidak dikenal, bcrypt tetap dijalankan terhadap hash tiruan agar waktu respons tidak
+  membedakan kedua kasus.
+- Password dan session identifier tidak pernah muncul di URL, body response, maupun log **(spek)**. Login hanya melalui
+  `POST` JSON, session identifier hanya dikirim lewat `Set-Cookie`, logger request hanya mencatat method, path, status,
+  durasi, dan user ID, dan logger GORM tidak mencetak nilai parameter query.
+- Platform Admin pertama dibuat saat startup dari `ADMIN_USERNAME`/`ADMIN_PASSWORD` bila belum ada admin. Proses ini
+  idempotent dan tidak pernah me-reset password admin yang sudah ada. Bila belum ada admin dan kredensial kosong, server
+  menolak start.
+
+### 4. Session
+
+Session disimpan di memori proses backend. Map berisi hash SHA-256 dari identifier, dengan indeks per user untuk pencabutan
+massal, dilindungi satu mutex. Goroutine pembersih menghapus session kedaluwarsa setiap `SESSION_CLEANUP_INTERVAL`.
+
+- **Identifier (spek):** 32 byte dari `crypto/rand`, di-encode base64url, opaque. Server hanya menyimpan hash-nya; hash
+  tanpa salt cukup karena identifier sudah berentropi tinggi, dan salt akan membuat lookup mustahil.
+- **Cookie (spek):** `sid` dengan `HttpOnly`, `SameSite=Strict`, `Path=/`, dan `Secure` saat `COOKIE_SECURE=true`
+  (HTTPS/production).
+- **Data session** hanya berisi identitas (user ID, waktu, status rotasi, token CSRF). Role, group, dan level akses tidak
+  disimpan di session; semuanya dibaca dari database setiap request, sehingga perubahan hak berlaku seketika.
+
+**Timeout (spek: ditentukan dan didokumentasikan tim).** Semua nilai dapat diubah lewat environment.
+
+| Parameter | Nilai | Alasan |
+| --- | --- | --- |
+| Idle timeout | 30 menit | Batas atas rentang OWASP (15-30 menit) untuk aplikasi berisiko rendah. |
+| Absolute expiration | 8 jam | Satu hari kerja; batas atas rentang OWASP (4-8 jam). Tidak diperpanjang oleh rotasi **(spek)**. |
+| Interval rotasi | 15 menit | Lebih pendek dari idle timeout, sehingga identifier yang bocor cepat kedaluwarsa. |
+| Grace period | 30 detik | Cukup untuk request yang sedang berjalan atau response yang tidak sampai saat rotasi. |
+
+Hubungan yang divalidasi saat startup: grace < rotasi < idle < absolute. Untuk demo, nilai dapat diperpendek, misalnya
+`SESSION_IDLE_TIMEOUT=2m`, `SESSION_ABSOLUTE_TIMEOUT=10m`, `SESSION_ROTATION_INTERVAL=30s`, `SESSION_GRACE_PERIOD=10s`.
+
+**Rotasi identifier (spek).** Nama cookie tetap; nilainya diganti pada tiga kejadian:
+
+1. **Login**: selalu membuat session baru (mencegah session fixation).
+2. **Berkala**: pada request pertama setelah interval rotasi terlewati.
+3. **Privilege naik**, yaitu user diberi role Platform Admin, user ditambahkan ke group, atau group user mendapat grant baru
+   atau grant-nya dinaikkan dari VIEW ke EDIT. Karena kejadian ini dilakukan admin terhadap user lain, semua session user
+   tersebut ditandai dan dirotasi pada request berikutnya. Hak baru sendiri berlaku seketika.
+
+Saat rotasi, identifier lama tetap diterima selama grace period dan setiap response untuknya mengirim ulang identifier baru;
+setelah grace period identifier lama ditolak **(spek)**. Pemeriksaan dan pembuatan identifier baru terjadi di bawah satu
+lock, sehingga dua request paralel tidak menghasilkan dua penerus.
+
+**Pencabutan session (spek).**
+
+| Kejadian | Tindakan |
+| --- | --- |
+| Logout | Session dan identifier lamanya yang masih dalam grace langsung tidak berlaku. |
+| User dihapus | Semua session user dicabut. |
+| Role Platform Admin dicabut | Semua session user dicabut; user harus login ulang. |
+| Dikeluarkan dari group, grant diturunkan atau dicabut | Session tidak dicabut. Akses sudah hilang pada request berikutnya karena otorisasi selalu membaca data terbaru. |
+| Absolute expiration tercapai | Session tidak berlaku; user harus login ulang. |
+
+### 5. Perlindungan CSRF
+
+- **Synchronizer token (spek: perlindungan CSRF).** Token 32 byte acak, berbeda dari session identifier, dibuat saat login
+  dan disimpan di session. Frontend menerimanya dari `POST /api/auth/login` dan `GET /api/auth/me`, menyimpannya hanya di
+  memori, dan mengirimnya di header `X-CSRF-Token` pada setiap `POST`, `PUT`, `PATCH`, dan `DELETE`. Perbandingan dilakukan
+  secara constant-time; token tidak berubah saat rotasi agar request dalam grace period tetap valid.
+- **Pemeriksaan `Origin`:** request pengubah state dari origin selain `ALLOWED_ORIGIN` ditolak `403 ORIGIN_NOT_ALLOWED`.
+  Bersama kewajiban JSON, ini juga menangkal login CSRF, saat token belum tersedia.
+- **Wajib `Content-Type: application/json`** pada setiap request pengubah state (`415` bila tidak). Form HTML lintas situs
+  tidak dapat mengirim JSON, dan `fetch` JSON lintas situs memicu preflight yang tidak diizinkan.
+- Semua `GET` bebas efek samping; logout dan eksekusi migration selalu `POST`.
+
+### 6. Otorisasi dan akses efektif
+
+- Akses database diberikan **ke group, bukan ke user (spek)**. User dapat menjadi anggota beberapa group, dan satu group
+  dapat memiliki level berbeda di setiap database **(spek)**.
+- Level akses: `VIEW` (melihat schema, data, serta riwayat dan detail migration) dan `EDIT` (seluruh `VIEW` ditambah
+  membuat, mengubah, menghapus, menduplikasi, dan menjalankan migration) **(spek)**.
+- **Rumus akses efektif (spek: ditentukan dan didokumentasikan tim):** akses efektif user terhadap sebuah database adalah
+  **level tertinggi dari semua group user yang memiliki grant ke database tersebut**; tanpa grant berarti tanpa akses.
+  Rumus ini dipilih karena bergabung ke group baru tidak pernah mengurangi akses, dan hasilnya mudah ditelusuri dari data
+  keanggotaan. Level disimpan sebagai integer (`1 = VIEW`, `2 = EDIT`) agar `MAX()` benar; API mengeksposnya sebagai
+  `"VIEW"`/`"EDIT"`.
+- **Platform Admin bukan tingkatan akses database (spek).** Admin mengelola user, group, koneksi, dan grant, tetapi tidak
+  otomatis dapat membuka schema, data, atau migration database mana pun. Admin yang membutuhkannya menjadi anggota group
+  seperti user lain, sehingga setiap akses tercatat di data keanggotaan. Uji koneksi tidak dianggap akses database: hanya
+  `SELECT 1` dan pemeriksaan superuser.
+- Platform harus selalu memiliki minimal satu Platform Admin: mencabut role atau menghapus admin terakhir ditolak
+  `409 LAST_ADMIN`, karena tanpa admin platform tidak dapat dikelola dan server tidak dapat membuat admin baru dari env.
+- **403, bukan 404:** user yang sudah login tetapi tidak berhak mendapat `403 FORBIDDEN`, termasuk untuk database yang sama
+  sekali tidak dapat ia akses. Pilihan ini membuat penolakan akses jelas saat diuji dan didemokan, dan memisahkan "tidak
+  berhak" dari "tidak ada". Database yang tidak dapat diakses tetap tidak muncul di daftar `GET /api/databases`.
+
+### 7. Koneksi database target
+
+- Dikelola oleh Platform Admin **(spek)**: nama, host, port, nama database, username, password, dan `sslMode`.
+- Password koneksi dienkripsi **AES-256-GCM** dengan `CREDENTIALS_KEY` (nonce acak per enkripsi). Password tidak dapat
+  di-hash karena nilai aslinya dibutuhkan untuk terhubung. Password bersifat write-only: response hanya memuat
+  `hasPassword`, dan saat edit field kosong berarti password lama dipertahankan.
+- Konfigurasi koneksi dibangun dari field terstruktur, bukan connection string berisi password, dan error driver tidak
+  diteruskan mentah. Kegagalan dilaporkan sebagai `502 TARGET_DB_UNAVAILABLE` atau `504 TARGET_DB_TIMEOUT` **(spek:
+  penanganan kegagalan koneksi)**.
+- **Role koneksi sebaiknya bukan superuser.** Semua aksi pengguna dijalankan atas nama role koneksi; superuser dapat
+  menghapus database lain, membaca `pg_authid`, dan menjalankan perintah shell lewat `COPY ... TO PROGRAM`. Uji koneksi
+  memeriksa `rolsuper` dan menampilkan peringatan. Role yang disarankan adalah owner database target, seperti
+  `platform_app` di `docker/target-init.sql`.
+- Satu pool per database target, dibuat saat pertama dibutuhkan: maksimal 5 koneksi, koneksi idle ditutup setelah 5 menit,
+  dan pool ditutup saat koneksi diubah atau dihapus. Koneksi, uji koneksi, dan query explorer dibatasi
+  `TARGET_QUERY_TIMEOUT`.
+
+### 8. Database explorer
+
+- Menampilkan schema, table, column (tipe, nullability, default), constraint (primary key, foreign key beserta rujukannya,
+  unique, check), index, dan data **(spek)**, langsung dari `pg_catalog`.
+- Schema sistem (`pg_catalog`, `information_schema`, `pg_toast`, schema temporer) dan table internal
+  `_platform_migrations` disembunyikan.
+- Setiap query berjalan di dalam transaction `READ ONLY`, sebagai pertahanan kedua setelah otorisasi: PostgreSQL menolak
+  perubahan apa pun di dalamnya.
+- Nama schema dan table dari URL harus ada di katalog, lalu di-quote dengan sanitasi identifier pgx. Identifier tidak dapat
+  dijadikan parameter query, sehingga validasi ini menutup celah SQL injection.
+- Data dipaginasi: 10, 25, 50, atau 100 baris per halaman (default 25). Backend membatasi `pageSize` ke 1-100 dan `page`
+  minimal 1. Urutan stabil berdasarkan primary key; table tanpa primary key diurutkan berdasarkan `ctid`.
+
+### 9. Migration
+
+**Lifecycle.** `draft → running → success | failed`.
+
+| Status | Dapat diubah | Memiliki versi | Aksi |
+| --- | --- | --- | --- |
+| `draft` | Ya, oleh user EDIT di database tersebut | Tidak | Ubah, hapus, jalankan |
+| `running` | Tidak | Ya | Menunggu |
+| `success` | Tidak | Ya | Lihat, duplikat jadi draft |
+| `failed` | Tidak | Ya | Lihat, duplikat jadi draft |
+
+- Draft memungkinkan SQL disusun dan ditinjau sebelum dijalankan **(spek: editor dan peninjauan)**. Semua user EDIT pada
+  database yang sama boleh mengubah draft, bukan hanya pembuatnya. Perubahan yang bersamaan ditangani dengan optimistic
+  locking: setiap simpan mengirim `revision` terakhir, dan revisi yang usang ditolak `409 REVISION_CONFLICT`.
+- Migration yang sudah dijalankan, baik sukses maupun gagal, bersifat immutable. Koreksi selalu melalui migration baru,
+  misalnya dengan **Duplikat jadi draft baru**.
+- **Versi dan riwayat linear (spek).** Versi diberikan saat eksekusi dimulai (`MAX(version) + 1` per database), termasuk
+  untuk eksekusi yang akhirnya gagal, sehingga urutan versi sama dengan urutan kejadian di database. Versi schema saat ini
+  adalah versi `success` terbesar. Riwayat tidak bercabang dan tidak pernah ditulis ulang.
+- Setiap migration mencatat versi, SQL, pembuat, pengubah terakhir, pelaksana, waktu mulai dan selesai, status, serta pesan
+  error dan SQLSTATE bila gagal **(spek)**. Referensi user memakai `ON DELETE SET NULL` ditambah salinan username, sehingga
+  riwayat tetap utuh saat user dihapus; pelaksana yang sudah dihapus ditampilkan sebagai `nama (deleted)`.
+- `base_version` dicatat saat draft dibuat. Bila database sudah berubah sejak itu, editor menampilkan peringatan agar SQL
+  ditinjau ulang (peringatan, bukan penolakan).
+
+**Eksekusi.**
+
+1. Akses `EDIT` diperiksa terhadap database milik migration.
+2. `sqlguard` menolak perintah kontrol transaction (`400 TRANSACTION_CONTROL_NOT_ALLOWED`).
+3. Lock per database diambil secara non-blocking; bila database sedang menjalankan migration lain, request ditolak
+   `409 MIGRATION_RUNNING`. Lock dipegang sampai status final tercatat, sehingga urutan versi sama dengan urutan commit.
+4. Status diubah `draft → running` dengan update bersyarat; bila migration sudah tidak berstatus draft (klik ganda atau dua
+   user bersamaan), request ditolak `409 MIGRATION_NOT_DRAFT`.
+5. Di database target, dalam **satu transaction (spek)**: `SET LOCAL lock_timeout` dan `statement_timeout`, SQL pengguna
+   dalam satu `Exec` tanpa parameter (protokol simple query menerima banyak statement, termasuk body function), lalu satu
+   baris di `_platform_migrations`. Seluruhnya di-commit bila berhasil dan di-rollback bila gagal **(spek)**.
+6. Status akhir `success` atau `failed` dicatat beserta pesan error PostgreSQL.
+
+Keputusan terkait:
+
+- SQL tidak dipecah per `;`, karena `;` juga muncul di string dan body function.
+- `sqlguard` memakai tokenizer kecil yang melewati komentar, string literal, quoted identifier, dan dollar-quoted string,
+  lalu memeriksa kata pertama setiap statement terhadap `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`,
+  `SAVEPOINT`, `RELEASE`, dan `PREPARE TRANSACTION`. `COMMIT` di tengah SQL pengguna akan meng-commit transaction platform
+  lebih awal dan merusak jaminan rollback, sehingga harus dicegah sebelum SQL dikirim. Pemeriksaan dilakukan saat eksekusi;
+  draft boleh disimpan apa adanya.
+- Eksekusi memakai context yang terlepas dari request HTTP dengan batas total `MIGRATION_EXEC_TIMEOUT`: menutup browser
+  tidak membatalkan migration yang sedang berjalan, dan hasilnya tetap tercatat.
+- Migration yang gagal bukan error HTTP: endpoint menjawab `200` dengan status `failed`. Error HTTP hanya dipakai bila
+  eksekusi tidak dimulai.
+- Default timeout: `lock_timeout` 5 detik, `statement_timeout` 60 detik, total 2 menit.
+- Migration di database berbeda dapat berjalan paralel. Constraint `UNIQUE(database_id, version)` di database platform
+  menjadi jaring pengaman terakhir.
+
+**Konsistensi antar database.** Database target dan database platform tidak dapat di-commit dalam satu transaction. Baris
+`_platform_migrations` ditulis di transaction yang sama dengan SQL pengguna, sehingga baris itu ada jika dan hanya jika
+perubahan ter-commit. Saat startup, setiap migration yang masih `running` (misalnya karena server mati di tengah eksekusi)
+direkonsiliasi: bila versinya ada di `_platform_migrations` statusnya menjadi `success`, bila tidak menjadi `failed`. Bila
+database target tidak dapat dihubungi, migration tetap `running`, kegagalannya dicatat di log, server tetap berjalan, dan
+rekonsiliasi diulang pada startup berikutnya.
+
+### 10. Penghapusan data
+
+Semua penghapusan adalah hard delete dengan `ON DELETE CASCADE`, kecuali referensi user di riwayat migration.
+
+| Dihapus | Ikut terhapus |
+| --- | --- |
+| User | Role, keanggotaan group, dan seluruh session-nya. Riwayat migration tetap ada dengan salinan username. |
+| Group | Keanggotaan dan grant; anggotanya langsung kehilangan akses lewat group tersebut. |
+| Koneksi database | Grant dan seluruh riwayat migration database itu; pool koneksinya ditutup. |
+
+### 11. Kontrak API dan format error
+
+Semua endpoint berada di bawah `/api` dan memakai JSON `camelCase`; waktu dalam RFC 3339. Route admin berada di
+`/api/admin/*`, dan grant serta keanggotaan memakai `PUT` agar idempotent.
+
+| Area | Endpoint |
+| --- | --- |
+| Auth | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me` |
+| Admin | `/admin/users`, `/admin/users/:userId`, `/admin/users/:userId/roles/:role`, `/admin/groups`, `/admin/groups/:groupId`, `/admin/groups/:groupId/members/:userId`, `/admin/groups/:groupId/grants/:databaseId`, `/admin/databases`, `/admin/databases/:databaseId`, `/admin/databases/test`, `/admin/databases/:databaseId/test` |
+| Explorer | `GET /databases`, `GET /databases/:databaseId`, `.../schemas`, `.../schemas/:schema/tables`, `.../tables/:table`, `.../tables/:table/rows?page=&pageSize=` |
+| Migration | `GET/POST /databases/:databaseId/migrations?status=`, `GET/PATCH/DELETE /migrations/:migrationId`, `POST /migrations/:migrationId/execute`, `POST /migrations/:migrationId/duplicate` |
+
+Setiap error memakai bentuk yang sama:
+
+```json
+{ "error": { "code": "MIGRATION_RUNNING", "message": "Sedang ada migration yang berjalan di database ini.", "details": {} } }
+```
+
+| HTTP | Kode |
+| --- | --- |
+| 400 | `VALIDATION_ERROR` (dengan `details` per field), `TRANSACTION_CONTROL_NOT_ALLOWED` |
+| 401 | `UNAUTHENTICATED`, `INVALID_CREDENTIALS` |
+| 403 | `FORBIDDEN`, `CSRF_INVALID`, `ORIGIN_NOT_ALLOWED` |
+| 404 | `NOT_FOUND` |
+| 409 | `USERNAME_TAKEN`, `CONFLICT`, `LAST_ADMIN`, `MIGRATION_RUNNING`, `MIGRATION_NOT_DRAFT`, `REVISION_CONFLICT` |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` |
+| 500 | `INTERNAL_ERROR` (tanpa detail internal; detailnya hanya di log) |
+| 502 / 504 | `TARGET_DB_UNAVAILABLE` / `TARGET_DB_TIMEOUT` |
+
+### 12. Strategi pengujian
+
+- **Unit test** di samping kode yang diuji, untuk logika padat aturan: `authz`, `sqlguard`, session store (dengan jam yang
+  dapat diinjeksi), enkripsi kredensial, pagination, pemetaan error, dan konfigurasi.
+- **Integration test** (build tag `integration`) terhadap PostgreSQL sungguhan di `test-pg`, sebagian besar melalui router
+  Gin dengan `httptest` tanpa menyalakan server, sesuai contoh di spesifikasi. Cakupannya meliputi login, logout, timeout
+  dan rotasi session, CSRF dan `Origin`, seed admin, CRUD admin dan penolakan non-admin, akses efektif multi-group, IDOR,
+  uji koneksi (termasuk kredensial salah dan peringatan superuser), explorer read-only, eksekusi sukses, multi-statement dan
+  function, rollback, statement non-transaksional, concurrency, lock timeout, dan rekonsiliasi.
+- Setiap fitur diuji untuk alur berhasil, gagal, dan penolakan akses **(spek)**. Semua test dijalankan dengan race detector.
+
+### 13. Batasan yang disengaja
+
+- **Session in-memory:** restart backend mengeluarkan semua pengguna, dan backend harus berjalan sebagai satu instance
+  (lock migration per database juga berada di memori proses).
+- **Statement non-transaksional** seperti `CREATE INDEX CONCURRENTLY`, `VACUUM`, `CREATE DATABASE`, dan `ALTER SYSTEM`
+  tidak didukung, karena setiap migration dijalankan dalam transaction agar dapat di-rollback. PostgreSQL menolaknya dengan
+  SQLSTATE `25001`, dan platform menampilkan penjelasan yang mudah dipahami. Body function standar SQL (`BEGIN ATOMIC`) juga
+  ditolak `sqlguard`; gunakan body dollar-quoted.
+- **Table `_platform_migrations`** dibuat di schema `public` setiap database target dan dikelola platform; table ini tidak
+  boleh diubah manual.
+- **Table tanpa primary key** diurutkan berdasarkan `ctid` saat dipaginasi. Urutannya stabil selama data tidak berubah, tetapi
+  dapat bergeser setelah `UPDATE` atau `VACUUM FULL`.
+- **Penyajian frontend:** frontend dijalankan melalui dev server Vite. Untuk deployment, hasil `bun run build` perlu
+  disajikan dari origin yang sama dengan backend, misalnya lewat reverse proxy.
+- Di luar lingkup milestone ini: DBMS selain PostgreSQL, schema diff, analisis `EXPLAIN`, re-authentication, rate limiting
+  login, dan pagination di halaman admin.
