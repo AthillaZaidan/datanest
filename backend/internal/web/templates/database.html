@@ -1,0 +1,157 @@
+{{define "content"}}
+{{$db := .DB}}{{$base := printf "/databases/%d" .DB.ID}}{{$schema := .Schema}}{{$table := .Table}}
+<header class="mb-6 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+  <div class="min-w-0">
+    <div class="flex flex-wrap items-center gap-2">
+      <h1 class="text-[22px] leading-8 font-semibold tracking-[-0.01em]">{{.DB.Name}}</h1>
+      <span class="pill-neutral">{{.DB.MyLevel}}</span>
+    </div>
+    <p class="mt-1 font-mono text-[13px] text-muted">{{.DB.Host}}:{{.DB.Port}}/{{.DB.DBName}}</p>
+  </div>
+  <div class="flex flex-wrap items-center gap-2">
+    <a class="btn" href="{{$base}}/migrations">{{icon "history" 16}} Riwayat migration</a>
+    {{if eq .DB.MyLevel "EDIT"}}<a class="btn-primary" href="{{$base}}/migrations/new">{{icon "plus" 16}} Migration baru</a>{{end}}
+  </div>
+</header>
+{{with .Rail}}
+<div class="-mt-2 mb-6 flex flex-wrap items-center gap-x-6 gap-y-2">
+  <p class="text-sm"><span class="text-muted">Versi schema </span><span class="font-mono font-medium">{{if .Current}}v{{.Current}}{{else}}-{{end}}</span></p>
+  {{template "rail" .}}
+</div>
+{{end}}
+{{template "flash" .}}
+{{if .Schemas}}
+<div class="flex flex-col gap-6 lg:grid lg:grid-cols-[224px_minmax(0,1fr)] lg:items-start">
+  <aside class="lg:sticky lg:top-0">
+    <form method="get" action="{{$base}}">
+      <label class="block"><span class="label">Schema</span>
+        <select name="schema" class="select w-full" onchange="this.form.submit()">
+          {{range .Schemas}}<option value="{{.Name}}" {{if eq .Name $schema}}selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+      </label>
+      <noscript><button class="btn-sm mt-2">Pilih</button></noscript>
+    </form>
+    <p class="mt-5 mb-1.5 text-xs text-muted">Tables{{with .Tables}}<span class="num">, {{len .}}</span>{{end}}</p>
+    {{with .TablesError}}<p class="text-sm text-negative">{{.}}</p>{{end}}
+    <ul class="flex gap-0.5 overflow-x-auto lg:max-h-[calc(100dvh-280px)] lg:flex-col lg:overflow-y-auto">
+      {{range .Tables}}
+      <li class="flex-none">
+        <a href="{{$base}}?schema={{$schema}}&table={{.Name}}" {{if eq .Name $table}}aria-current="true"{{end}}
+          class="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 font-mono text-[13px] transition-colors {{if eq .Name $table}}bg-active text-ink{{else}}text-muted hover:bg-raised hover:text-ink{{end}}">
+          {{icon "table" 14}}<span class="truncate">{{.Name}}</span>
+        </a>
+      </li>
+      {{end}}
+    </ul>
+    {{if and (not .Tables) (not .TablesError)}}<p class="muted">Tidak ada table di schema ini.</p>{{end}}
+  </aside>
+
+  <section class="min-w-0">
+    {{if not .Table}}
+      <div class="empty"><span>Pilih table di sebelah kiri untuk melihat kolom, constraint, index, dan datanya.</span></div>
+    {{else}}
+      <h2 class="mb-3 font-mono text-base font-medium"><span class="text-muted">{{.Schema}}.</span>{{.Table}}</h2>
+      <div role="tablist" aria-label="Tampilan table" class="flex gap-5 overflow-x-auto border-b border-line">
+        <a role="tab" aria-selected="{{eq .Tab "structure"}}" class="{{if eq .Tab "structure"}}tab-on{{else}}tab{{end}}" href="{{$base}}?schema={{$schema}}&table={{$table}}">Struktur</a>
+        <a role="tab" aria-selected="{{eq .Tab "data"}}" class="{{if eq .Tab "data"}}tab-on{{else}}tab{{end}}" href="{{$base}}?schema={{$schema}}&table={{$table}}&tab=data">Data</a>
+      </div>
+      <div class="pt-5">
+        {{with .TableError}}<div class="alert-error" role="alert">{{.}}</div>{{end}}
+        {{with .Detail}}{{template "structure" $}}{{end}}
+        {{with .Rows}}{{template "rows" $}}{{end}}
+      </div>
+    {{end}}
+  </section>
+</div>
+{{end}}
+{{end}}
+
+{{define "structure"}}
+{{$pk := .PK}}{{$fk := .FK}}
+<div class="space-y-10">
+  <section>
+    <h2 class="mb-2 flex min-h-8 items-center text-base font-semibold">Columns<span class="num ml-2 text-sm font-normal text-muted">{{len .Detail.Columns}}</span></h2>
+    <div class="overflow-x-auto"><table class="tbl min-w-[560px]">
+      <thead><tr><th class="th w-[30%]">Nama</th><th class="th">Tipe</th><th class="th">Nullable</th><th class="th">Default</th></tr></thead>
+      <tbody>
+      {{range .Detail.Columns}}
+      <tr>
+        <td class="td"><span class="inline-flex items-center gap-2"><span class="ident font-medium">{{.Name}}</span>
+          {{if index $pk .Name}}<span class="inline-flex items-center gap-1 text-xs text-muted">{{icon "key-round" 13}} PK</span>{{end}}
+          {{if index $fk .Name}}<span class="text-xs text-muted">FK</span>{{end}}</span></td>
+        <td class="td ident text-muted">{{.DataType}}</td>
+        <td class="td text-muted">{{if .Nullable}}ya{{else}}tidak{{end}}</td>
+        <td class="td ident text-muted">{{deref .Default}}</td>
+      </tr>
+      {{end}}
+      </tbody>
+    </table></div>
+  </section>
+  <section>
+    <h2 class="mb-2 flex min-h-8 items-center text-base font-semibold">Constraints<span class="num ml-2 text-sm font-normal text-muted">{{len .Detail.Constraints}}</span></h2>
+    {{if not .Detail.Constraints}}<p class="muted">Table ini tidak punya constraint.</p>{{else}}
+    <div class="overflow-x-auto"><table class="tbl min-w-[560px]">
+      <thead><tr><th class="th w-[30%]">Nama</th><th class="th">Tipe</th><th class="th">Definisi</th></tr></thead>
+      <tbody>
+      {{range .Detail.Constraints}}
+      <tr><td class="td ident">{{.Name}}</td><td class="td"><span class="pill-neutral">{{.Type}}</span></td><td class="td ident text-muted">{{.Definition}}</td></tr>
+      {{end}}
+      </tbody>
+    </table></div>{{end}}
+  </section>
+  <section>
+    <h2 class="mb-2 flex min-h-8 items-center text-base font-semibold">Indexes<span class="num ml-2 text-sm font-normal text-muted">{{len .Detail.Indexes}}</span></h2>
+    {{if not .Detail.Indexes}}<p class="muted">Table ini tidak punya index.</p>{{else}}
+    <div class="overflow-x-auto"><table class="tbl min-w-[560px]">
+      <thead><tr><th class="th w-[30%]">Nama</th><th class="th">Definisi</th><th class="th">Unique</th></tr></thead>
+      <tbody>
+      {{range .Detail.Indexes}}
+      <tr><td class="td"><span class="inline-flex items-center gap-2"><span class="ident">{{.Name}}</span>{{if .Primary}}<span class="pill-neutral">PK</span>{{end}}</span></td>
+        <td class="td ident text-muted">{{.Definition}}</td><td class="td text-muted">{{if .Unique}}ya{{else}}tidak{{end}}</td></tr>
+      {{end}}
+      </tbody>
+    </table></div>{{end}}
+  </section>
+</div>
+{{end}}
+
+{{define "rows"}}
+{{$p := .Pager}}{{$num := .Numeric}}{{$base := printf "/databases/%d?schema=%s&table=%s&tab=data" .DB.ID .Schema .Table}}
+<div>
+  <div class="mb-3 flex flex-wrap items-center gap-3">
+    <p class="text-sm"><span class="num font-medium">{{$p.From}}–{{$p.To}}</span> <span class="text-muted">dari</span> <span class="num font-medium">{{$p.Total}}</span> <span class="text-muted">baris</span></p>
+    <form method="get" action="/databases/{{.DB.ID}}" class="ml-auto flex items-center gap-2 text-sm text-muted">
+      <input type="hidden" name="schema" value="{{.Schema}}"><input type="hidden" name="table" value="{{.Table}}"><input type="hidden" name="tab" value="data">
+      <label class="flex items-center gap-2">Baris per halaman
+        <select name="pageSize" class="select" onchange="this.form.submit()">
+          {{range .PageSizes}}<option value="{{.}}" {{if eq . $p.PageSize}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </label>
+      <noscript><button class="btn-sm">Terapkan</button></noscript>
+    </form>
+    <div class="flex items-center gap-1.5">
+      {{if gt $p.Page 1}}<a class="btn" href="{{$base}}&page={{add $p.Page -1}}&pageSize={{$p.PageSize}}" aria-label="Halaman sebelumnya">{{icon "chevron-left" 14}} Sebelumnya</a>{{else}}<span class="btn pointer-events-none opacity-50">{{icon "chevron-left" 14}} Sebelumnya</span>{{end}}
+      <span class="num px-1 text-sm text-muted">{{$p.Page}} / {{$p.Last}}</span>
+      {{if lt $p.Page $p.Last}}<a class="btn" href="{{$base}}&page={{add $p.Page 1}}&pageSize={{$p.PageSize}}" aria-label="Halaman berikutnya">Berikutnya {{icon "chevron-right" 14}}</a>{{else}}<span class="btn pointer-events-none opacity-50">Berikutnya {{icon "chevron-right" 14}}</span>{{end}}
+    </div>
+  </div>
+  {{if not .Rows.Rows}}
+    <div class="empty"><span>Table ini belum punya baris.</span></div>
+  {{else}}
+  <div class="max-h-[calc(100dvh-300px)] min-h-64 overflow-auto rounded-lg border border-line">
+    <table class="tbl">
+      <thead class="sticky top-0 z-10 bg-sheet"><tr>
+        {{range $j, $c := .Rows.Columns}}<th class="h-10 border-b border-line px-3 font-mono text-xs font-normal whitespace-nowrap text-muted {{if index $num $j}}text-right{{end}}">{{$c}}</th>{{end}}
+      </tr></thead>
+      <tbody class="[&>tr:first-child>td]:border-t-0">
+        {{range .Rows.Rows}}
+        <tr class="hover:bg-raised">
+          {{range $j, $v := .}}<td class="h-10 max-w-xs truncate border-t border-rule px-3 font-mono text-[13px] {{if index $num $j}}num text-right{{end}}">{{if eq $v nil}}<span class="text-muted italic">NULL</span>{{else}}{{cell $v}}{{end}}</td>{{end}}
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+</div>
+{{end}}
