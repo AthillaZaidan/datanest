@@ -87,6 +87,7 @@ func Register(r *gin.Engine, h *Handler) {
 	p.POST("/migrations/:id/execute", h.executeMigration)
 	p.POST("/migrations/:id/delete", h.deleteMigration)
 	p.POST("/migrations/:id/duplicate", h.duplicateMigration)
+	p.POST("/migrations/:id/explain", h.explainMigration)
 
 	a := p.Group("/admin", h.requireAdmin)
 	a.GET("/users", h.users)
@@ -353,8 +354,22 @@ var funcs = template.FuncMap{
 		}
 		return out
 	},
-	"max":  func(a, b int) int { return max(a, b) },
-	"add":  func(a, b int) int { return a + b },
+	"max": func(a, b int) int { return max(a, b) },
+	"add": func(a, b int) int { return a + b },
+	"mul": func(a, b int) int { return a * b },
+	"ms": func(f *float64) string {
+		if f == nil {
+			return "-"
+		}
+		return fmt.Sprintf("%.3f ms", *f)
+	},
+	"num": func(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) },
+	"numPtr": func(f *float64) string {
+		if f == nil {
+			return "-"
+		}
+		return strconv.FormatFloat(*f, 'f', -1, 64)
+	},
 	"join": strings.Join,
 	"deref": func(s *string) string {
 		if s == nil {

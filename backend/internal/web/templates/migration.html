@@ -41,6 +41,7 @@
     </div>
     {{end}}
     {{if eq $m.Status "running"}}<p class="muted">Migration sedang berjalan…</p>{{end}}
+    {{template "explain" .}}
     {{if $canEdit}}
     <div class="flex flex-wrap items-center gap-2">
       {{if $draft}}
@@ -99,6 +100,54 @@ for (const box of document.querySelectorAll('[data-editor]')) {
   sync()
 }
 </script>
+{{end}}
+
+{{define "explain"}}
+<section aria-labelledby="explain" class="space-y-3 rounded-lg border border-line p-4">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h2 id="explain" class="text-base font-semibold">Analisis execution plan</h2>
+      <p class="small">EXPLAIN untuk setiap statement pada SQL yang tersimpan. Semuanya dijalankan dalam satu transaction lalu di-rollback, jadi database tidak berubah.</p>
+    </div>
+    <form method="post" action="/migrations/{{.M.ID}}/explain" class="flex items-center gap-3">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      {{if eq .DB.MyLevel "EDIT"}}<label class="flex items-center gap-2 text-sm"><input type="checkbox" name="analyze" value="1" {{if .Analyze}}checked{{end}} class="size-4 accent-[var(--color-ink)]"> ANALYZE</label>{{end}}
+      <button class="btn">{{icon "activity" 16}} Analisis</button>
+    </form>
+  </div>
+  {{if .Plans}}
+  <h3 class="text-sm font-semibold">Hasil analisis{{if .Analyze}} (ANALYZE: query dijalankan sungguhan lalu di-rollback){{end}}</h3>
+  {{$analyze := .Analyze}}
+  {{range $i, $p := .Plans}}
+  <div class="rounded-lg bg-raised p-3">
+    <p class="mb-2 flex items-baseline gap-2 text-xs text-muted"><span class="font-medium text-ink">Statement {{add $i 1}}</span><code class="truncate font-mono text-[12px]">{{$p.SQL}}</code></p>
+    {{with $p.Error}}<div class="alert-error mb-0" role="alert">{{.}}</div>{{end}}
+    {{with $p.Note}}<p class="small">{{.}}</p>{{end}}
+    {{if $p.Explained}}
+    <div class="overflow-x-auto rounded-md bg-sheet">
+      <table class="tbl min-w-[640px]">
+        <thead><tr><th class="th pl-3">Node</th><th class="th">Relation / index</th><th class="th">Join</th><th class="th num text-right">Cost</th><th class="th num text-right">Rows (est.)</th>
+          {{if $analyze}}<th class="th num text-right">Rows aktual</th><th class="th num text-right">Waktu aktual</th><th class="th num pr-3 text-right">Loops</th>{{end}}</tr></thead>
+        <tbody>
+        {{range $p.Nodes}}
+        <tr>
+          <td class="td pl-3"><span style="padding-left: {{mul .Depth 16}}px" class="inline-block font-medium">{{.NodeType}}{{with .Operation}} <span class="font-normal text-muted">({{.}})</span>{{end}}{{with .Strategy}} <span class="font-normal text-muted">{{.}}</span>{{end}}</span></td>
+          <td class="td ident">{{.Relation}}{{with .Index}} <span class="text-muted">using</span> {{.}}{{end}}</td>
+          <td class="td">{{.JoinType}}</td>
+          <td class="td num text-right">{{num .StartupCost}}..{{num .TotalCost}}</td>
+          <td class="td num text-right">{{num .PlanRows}}</td>
+          {{if $analyze}}<td class="td num text-right">{{numPtr .ActualRows}}</td><td class="td num text-right">{{ms .ActualMs}}</td><td class="td num pr-3 text-right">{{numPtr .Loops}}</td>{{end}}
+        </tr>
+        {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{if $analyze}}<p class="small mt-2">Planning {{ms $p.PlanningMs}} · Eksekusi {{ms $p.ExecutionMs}}</p>{{end}}
+    {{end}}
+  </div>
+  {{end}}
+  {{end}}
+</section>
 {{end}}
 
 {{define "meta"}}<div class="flex items-baseline justify-between gap-4 border-t border-rule py-2.5 first:border-t-0"><dt class="text-sm text-muted">{{.Label}}</dt><dd class="text-right text-sm">{{.Value}}</dd></div>{{end}}
