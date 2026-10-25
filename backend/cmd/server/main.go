@@ -20,11 +20,13 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/config"
 	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
+	"github.com/AthillaZaidan/datanest/backend/internal/demo"
 	"github.com/AthillaZaidan/datanest/backend/internal/explorer"
 	"github.com/AthillaZaidan/datanest/backend/internal/httpapi"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
 	"github.com/AthillaZaidan/datanest/backend/internal/session"
+	"github.com/AthillaZaidan/datanest/backend/internal/web"
 )
 
 func main() {
@@ -81,15 +83,17 @@ func run() error {
 	if err := migrationService.Reconcile(context.Background()); err != nil {
 		log.Printf("reconcile: %v", err)
 	}
-	srv := &http.Server{
-		Addr: ":" + cfg.AppPort,
-		Handler: httpapi.NewRouter(httpapi.Deps{
-			Admin: adminService, Databases: databaseService, Explorer: explorerService, Migrations: migrationService,
-			Security: auth.ValidateStateRequest(cfg.AllowedOrigin), RequireAuth: authService.RequireAuth,
-			RequireAdmin: authService.RequireAdmin, Login: authService.Login, Logout: authService.Logout, Me: authService.Me,
-		}),
-		ReadHeaderTimeout: 10 * time.Second,
+	router := httpapi.NewRouter(httpapi.Deps{
+		Admin: adminService, Databases: databaseService, Explorer: explorerService, Migrations: migrationService,
+		Security: auth.ValidateStateRequest(cfg.AllowedOrigin), RequireAuth: authService.RequireAuth,
+		RequireAdmin: authService.RequireAdmin, Login: authService.Login, Logout: authService.Logout, Me: authService.Me,
+	})
+	pages := &web.Handler{Auth: authService, Admin: adminService, Databases: databaseService, Explorer: explorerService, Migrations: migrationService}
+	if os.Getenv("SHOW_DEMO_ACCOUNTS") == "true" {
+		pages.Demo = demo.Accounts
 	}
+	web.Register(router, pages)
+	srv := &http.Server{Addr: ":" + cfg.AppPort, Handler: router, ReadHeaderTimeout: 10 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
