@@ -13,6 +13,7 @@ import {
 } from '../api/migrations'
 import { CopyIcon, PlayIcon, SaveIcon, TrashIcon } from '../components/icons'
 import { Alert, Loading, Meta, PageHeader } from '../components/kit'
+import PlanPanel from '../components/migrations/PlanPanel'
 import SqlEditor from '../components/migrations/SqlEditor'
 import StatusBadge from '../components/migrations/StatusBadge'
 import { ui } from '../components/ui'
@@ -229,6 +230,8 @@ function ExistingMigration({ id }: { id: string }) {
               )}
             </div>
           )}
+
+          <PlanPanel migrationId={id} canEdit={canEdit} dirty={dirty} />
         </div>
 
         <aside>

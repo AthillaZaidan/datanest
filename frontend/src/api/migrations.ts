@@ -54,3 +54,34 @@ export function executeMigration(id: string) {
 export function duplicateMigration(id: string) {
   return send<Migration>('POST', `/migrations/${enc(id)}/duplicate`)
 }
+
+export type PlanNode = {
+  depth: number
+  nodeType: string
+  operation?: string
+  relation?: string
+  index?: string
+  joinType?: string
+  strategy?: string
+  startupCost: number
+  totalCost: number
+  planRows: number
+  actualRows: number | null
+  actualMs: number | null
+  loops: number | null
+}
+
+export type StatementPlan = {
+  sql: string
+  explained: boolean
+  note?: string
+  error?: string
+  nodes: PlanNode[] | null
+  planningMs: number | null
+  executionMs: number | null
+}
+
+// EXPLAIN runs in a rolled-back transaction; analyze also executes the SQL, so it needs EDIT.
+export function explainMigration(id: string, analyze: boolean) {
+  return send<{ plans: StatementPlan[] | null }>('POST', `/migrations/${enc(id)}/explain${analyze ? '?analyze=true' : ''}`)
+}
