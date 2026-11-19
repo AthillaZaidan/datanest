@@ -8,6 +8,8 @@ import { ui } from '../components/ui'
 import { useAuth } from '../context/AuthContext'
 import { demoAccounts } from '../dev/demoAccounts'
 
+const showDemoAccounts = import.meta.env.DEV || import.meta.env.VITE_SHOW_DEMO_ACCOUNTS === 'true'
+
 export default function Login() {
   const { user, login } = useAuth()
   const [username, setUsername] = useState('')
@@ -55,7 +57,7 @@ export default function Login() {
           </form>
         </div>
         <p className="mt-4 text-xs text-muted">Akun dibuat oleh Platform Admin. Akses database diberikan lewat group.</p>
-        {import.meta.env.DEV && (
+        {showDemoAccounts && (
           <section aria-labelledby="demo" className="mt-6">
             <h2 id="demo" className="mb-2 text-sm font-medium">Akun demo</h2>
             <ul className="space-y-1">
@@ -79,7 +81,7 @@ export default function Login() {
                 </li>
               ))}
             </ul>
-            <p className="mt-2 text-xs text-muted">Hanya tampil saat development. Jalankan seed dulu agar akun ini ada.</p>
+            <p className="mt-2 text-xs text-muted">Hanya tampil di development atau build dengan VITE_SHOW_DEMO_ACCOUNTS=true. Jalankan seed dulu agar akun ini ada.</p>
           </section>
         )}
       </div>

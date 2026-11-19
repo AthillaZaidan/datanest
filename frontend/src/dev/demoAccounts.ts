@@ -1,5 +1,5 @@
 // Local demo accounts created by `go run ./cmd/seed`; must match backend/internal/demo.
-// Only imported behind import.meta.env.DEV, so production builds drop it.
+// Shown only in development or when built with VITE_SHOW_DEMO_ACCOUNTS=true.
 export const demoAccounts = [
   { username: 'demo-admin', password: 'demoadmin123', role: 'Platform Admin', access: 'Kelola user, group, koneksi; tanpa akses database' },
   { username: 'developer', password: 'developer123', role: 'Edit toko, View kampus', access: 'Menulis dan menjalankan migration' },
