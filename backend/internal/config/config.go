@@ -14,6 +14,8 @@ type Config struct {
 	AppPort       string
 	AllowedOrigin string
 	CookieSecure  bool
+	// Built SPA served by the backend, relative to where the server runs (backend/).
+	FrontendDir string
 
 	PlatformDSN string
 
@@ -56,6 +58,7 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 		AppPort:       r.str("APP_PORT", "8080"),
 		AllowedOrigin: r.str("ALLOWED_ORIGIN", "http://localhost:8080"),
 		CookieSecure:  r.boolean("COOKIE_SECURE", false),
+		FrontendDir:   r.str("FRONTEND_DIR", "../frontend/dist"),
 		PlatformDSN:   r.str("PLATFORM_DSN", ""),
 		AdminUsername: r.str("ADMIN_USERNAME", ""),
 		AdminPassword: r.str("ADMIN_PASSWORD", ""),
