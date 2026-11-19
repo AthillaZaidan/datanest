@@ -14,25 +14,30 @@ import (
 
 // StatementPlan is the analysis of one statement of a migration.
 type StatementPlan struct {
-	SQL         string
-	Explained   bool
-	Note        string
-	Error       string
-	Nodes       []PlanNode
-	PlanningMs  *float64
-	ExecutionMs *float64
+	SQL         string     `json:"sql"`
+	Explained   bool       `json:"explained"`
+	Note        string     `json:"note,omitempty"`
+	Error       string     `json:"error,omitempty"`
+	Nodes       []PlanNode `json:"nodes"`
+	PlanningMs  *float64   `json:"planningMs"`
+	ExecutionMs *float64   `json:"executionMs"`
 }
 
 // PlanNode is one node of a PostgreSQL plan, flattened in display order.
 type PlanNode struct {
-	Depth                  int
-	NodeType, Operation    string
-	Relation, Index        string
-	JoinType, Strategy     string
-	StartupCost, TotalCost float64
-	PlanRows               float64
-	ActualRows, ActualMs   *float64
-	Loops                  *float64
+	Depth       int      `json:"depth"`
+	NodeType    string   `json:"nodeType"`
+	Operation   string   `json:"operation,omitempty"`
+	Relation    string   `json:"relation,omitempty"`
+	Index       string   `json:"index,omitempty"`
+	JoinType    string   `json:"joinType,omitempty"`
+	Strategy    string   `json:"strategy,omitempty"`
+	StartupCost float64  `json:"startupCost"`
+	TotalCost   float64  `json:"totalCost"`
+	PlanRows    float64  `json:"planRows"`
+	ActualRows  *float64 `json:"actualRows"`
+	ActualMs    *float64 `json:"actualMs"`
+	Loops       *float64 `json:"loops"`
 }
 
 // Statements PostgreSQL can EXPLAIN; everything else (DDL, utility commands) is only run.

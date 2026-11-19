@@ -39,12 +39,12 @@ func NewRouter(d Deps) *gin.Engine {
 		listSchemas, listTables, getTable, getRows = h.listSchemas, h.listTables, h.getTable, h.getRows
 	}
 
-	listMig, createMig, getMig, updateMig, deleteMig, executeMig, duplicateMig := notImplemented,
-		notImplemented, notImplemented, notImplemented, notImplemented, notImplemented, notImplemented
+	listMig, createMig, getMig, updateMig, deleteMig, executeMig, duplicateMig, explainMig := notImplemented,
+		notImplemented, notImplemented, notImplemented, notImplemented, notImplemented, notImplemented, notImplemented
 	if d.Migrations != nil {
 		h := migrationHandlers{svc: d.Migrations}
-		listMig, createMig, getMig, updateMig, deleteMig, executeMig, duplicateMig = h.list, h.create,
-			h.get, h.update, h.delete, h.execute, h.duplicate
+		listMig, createMig, getMig, updateMig, deleteMig, executeMig, duplicateMig, explainMig = h.list, h.create,
+			h.get, h.update, h.delete, h.execute, h.duplicate, h.explain
 	}
 
 	ah := adminHandlers{svc: d.Admin}
@@ -120,6 +120,7 @@ func NewRouter(d Deps) *gin.Engine {
 	user.DELETE("/migrations/:migrationId", deleteMig)
 	user.POST("/migrations/:migrationId/execute", executeMig)
 	user.POST("/migrations/:migrationId/duplicate", duplicateMig)
+	user.POST("/migrations/:migrationId/explain", explainMig)
 
 	return r
 }

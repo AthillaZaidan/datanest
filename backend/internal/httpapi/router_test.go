@@ -60,6 +60,7 @@ var contract = []struct{ method, path string }{
 	{"DELETE", "/api/migrations/7"},
 	{"POST", "/api/migrations/7/execute"},
 	{"POST", "/api/migrations/7/duplicate"},
+	{"POST", "/api/migrations/7/explain"},
 }
 
 func do(r http.Handler, method, path string) *httptest.ResponseRecorder {

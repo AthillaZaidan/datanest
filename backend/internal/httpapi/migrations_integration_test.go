@@ -388,3 +388,53 @@ func TestMigrationDeletedExecutor(t *testing.T) {
 		t.Errorf("after deleting executor = %+v", v)
 	}
 }
+
+func TestExplainMigration(t *testing.T) {
+	e := setupMigrations(t)
+	v := e.draft(t, "CREATE TABLE extra (id int);\nSELECT * FROM extra WHERE id = 1;")
+	path := "/api/migrations/" + itoa(v.ID) + "/explain"
+
+	type plans struct {
+		Plans []migration.StatementPlan `json:"plans"`
+	}
+	decode := func(r resp) plans {
+		t.Helper()
+		var p plans
+		if err := json.Unmarshal(r.Body, &p); err != nil {
+			t.Fatalf("decode: %v (%s)", err, r.Body)
+		}
+		return p
+	}
+
+	// VIEW may EXPLAIN. The DDL is only run, so the SELECT after it can still be planned.
+	r := call(e.as(e.viewer), "POST", path, nil)
+	if r.Code != 200 {
+		t.Fatalf("view explain = %d %s", r.Code, r.Body)
+	}
+	p := decode(r)
+	if len(p.Plans) != 2 || p.Plans[0].Explained || !p.Plans[1].Explained || p.Plans[1].Nodes[0].Relation != "extra" {
+		t.Fatalf("plans = %+v", p.Plans)
+	}
+	if p.Plans[1].Nodes[0].ActualMs != nil {
+		t.Fatal("plain EXPLAIN reports actual time")
+	}
+
+	// ANALYZE executes the SQL, so VIEW is refused and EDIT gets actual times.
+	if r := call(e.as(e.viewer), "POST", path+"?analyze=true", nil); r.Code != 403 {
+		t.Fatalf("view analyze = %d", r.Code)
+	}
+	if r := call(e.as(e.otherEditor), "POST", path, nil); r.Code != 403 {
+		t.Fatalf("other database editor = %d", r.Code)
+	}
+	r = call(e.as(e.editor), "POST", path+"?analyze=true", nil)
+	if r.Code != 200 {
+		t.Fatalf("editor analyze = %d %s", r.Code, r.Body)
+	}
+	if p := decode(r); p.Plans[1].Nodes[0].ActualMs == nil || p.Plans[1].ExecutionMs == nil {
+		t.Fatalf("ANALYZE without actual times: %s", r.Body)
+	}
+
+	if e.tableExists(t, "extra") {
+		t.Fatal("explain kept the DDL")
+	}
+}

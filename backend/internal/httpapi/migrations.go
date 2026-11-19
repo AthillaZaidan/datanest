@@ -124,6 +124,24 @@ func (h migrationHandlers) execute(c *gin.Context) {
 	h.withMigration(c, http.StatusOK, h.svc.Execute)
 }
 
+// explain plans the saved SQL in a rolled-back transaction. ?analyze=true also runs it, which needs EDIT.
+func (h migrationHandlers) explain(c *gin.Context) {
+	userID, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := pathID(c, "migrationId")
+	if !ok {
+		return
+	}
+	plans, err := h.svc.Explain(c.Request.Context(), userID, id, c.Query("analyze") == "true")
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"plans": plans})
+}
+
 func (h migrationHandlers) duplicate(c *gin.Context) {
 	h.withMigration(c, http.StatusCreated, h.svc.Duplicate)
 }
