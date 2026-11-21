@@ -64,26 +64,26 @@ export default function Users() {
           ) : s.data.length === 0 ? (
             <Empty>Belum ada user.</Empty>
           ) : (
-            <table className={`${ui.table} min-w-[520px]`}>
-              <thead>
+            <table className={`${ui.table} ${ui.stack.table}`}>
+              <thead className={ui.stack.thead}>
                 <tr>
                   <th className={`${ui.th} w-2/5`}>Username</th>
                   <th className={ui.th}>Role</th>
                   <th className={ui.th}><span className="sr-only">Aksi</span></th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className={ui.stack.tbody}>
                 {s.data.map((u) => (
-                  <tr key={u.id} className={u.id === id ? 'bg-raised' : ''}>
-                    <td className={`${ui.td} h-14`}>
+                  <tr key={u.id} className={`${ui.stack.tr} ${u.id === id ? 'bg-raised' : ''}`}>
+                    <td className={`${ui.td} ${ui.stack.td} h-14`}>
                       <span className="flex items-center gap-2.5">
                         <Avatar id={u.id} name={u.username} />
                         <span className="font-medium">{u.username}</span>
                       </span>
                     </td>
-                    <td className={ui.td}>{u.isAdmin ? <Pill>Platform Admin</Pill> : <span className="text-muted">User</span>}</td>
-                    <td className={ui.td}>
-                      <div className="flex justify-end gap-1.5">
+                    <td className={`${ui.td} ${ui.stack.td}`}>{u.isAdmin ? <Pill>Platform Admin</Pill> : <span className="text-muted">User</span>}</td>
+                    <td className={`${ui.td} ${ui.stack.td}`}>
+                      <div className="flex flex-wrap justify-end gap-1.5 max-sm:justify-start">
                         <button
                           className={ui.buttonSm}
                           disabled={s.busy}

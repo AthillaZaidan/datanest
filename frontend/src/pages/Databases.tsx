@@ -54,10 +54,13 @@ export default function Databases() {
           <table className={ui.table}>
             <thead>
               <tr>
-                <th className={`${ui.th} w-1/2`}>Database</th>
+                <th className={`${ui.th} sm:w-1/2`}>Database</th>
                 <th className={ui.th}>Akses</th>
-                <th className={`${ui.th} ${ui.num}`}>Versi schema</th>
-                <th className={`${ui.th} w-16`}><span className="sr-only">Aksi</span></th>
+                <th className={`${ui.th} ${ui.num}`}>
+                  <span className="sm:hidden">Versi</span>
+                  <span className="hidden sm:inline">Versi schema</span>
+                </th>
+                <th className={`${ui.th} hidden w-16 sm:table-cell`}><span className="sr-only">Aksi</span></th>
               </tr>
             </thead>
             <tbody>
@@ -71,7 +74,7 @@ export default function Databases() {
                   <td className={`${ui.td} ${ui.num} font-mono text-[13px]`}>
                     {d.currentVersion ? `v${d.currentVersion}` : <span className="text-muted">-</span>}
                   </td>
-                  <td className={`${ui.td} text-right`}>
+                  <td className={`${ui.td} hidden text-right sm:table-cell`}>
                     <Link to={`/databases/${d.id}`} className={ui.buttonSm}>Buka</Link>
                   </td>
                 </tr>

@@ -28,6 +28,14 @@ export const ui = {
   table: 'w-full border-collapse text-left text-sm',
   th: 'h-10 px-3 text-xs font-normal whitespace-nowrap text-muted first:pl-0 last:pr-0',
   td: 'h-12 border-t border-rule px-3 align-middle first:pl-0 last:pr-0',
+  // Below 640px a table folds into stacked rows, so action buttons stay on screen instead of behind a sideways scroll.
+  stack: {
+    table: 'max-sm:block',
+    thead: 'max-sm:hidden',
+    tbody: 'max-sm:block',
+    tr: 'max-sm:block max-sm:border-t max-sm:border-rule max-sm:py-3 max-sm:first:border-t-0',
+    td: 'max-sm:block max-sm:h-auto max-sm:border-0 max-sm:px-0 max-sm:py-1',
+  },
   num: 'num text-right',
   ident: 'font-mono text-[13px]',
   muted: 'text-sm text-muted',

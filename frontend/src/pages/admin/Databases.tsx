@@ -108,8 +108,8 @@ export default function Databases() {
           ) : s.data.length === 0 ? (
             <Empty>Belum ada koneksi. Tambahkan database target lewat form di samping.</Empty>
           ) : (
-            <table className={`${ui.table} min-w-[600px]`}>
-              <thead>
+            <table className={`${ui.table} ${ui.stack.table}`}>
+              <thead className={ui.stack.thead}>
                 <tr>
                   <th className={ui.th}>Koneksi</th>
                   <th className={ui.th}>User</th>
@@ -117,17 +117,17 @@ export default function Databases() {
                   <th className={ui.th}><span className="sr-only">Aksi</span></th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className={ui.stack.tbody}>
                 {s.data.map((d) => (
-                  <tr key={d.id} className={d.id === id ? 'bg-raised' : ''}>
-                    <td className={`${ui.td} h-16`}>
+                  <tr key={d.id} className={`${ui.stack.tr} ${d.id === id ? 'bg-raised' : ''}`}>
+                    <td className={`${ui.td} ${ui.stack.td} h-16`}>
                       <p className="font-medium">{d.name}</p>
                       <p className={`${ui.ident} text-muted`}>{d.host}:{d.port}/{d.dbName} <span className="font-sans text-xs">· ssl {d.sslMode}</span></p>
                     </td>
-                    <td className={`${ui.td} ${ui.ident}`}>{d.username}</td>
-                    <td className={ui.td}>{d.hasPassword ? <Pill tone="positive">Tersimpan</Pill> : <span className="text-muted">Tidak ada</span>}</td>
-                    <td className={ui.td}>
-                      <div className="flex justify-end gap-1.5">
+                    <td className={`${ui.td} ${ui.stack.td} ${ui.ident}`}>{d.username}</td>
+                    <td className={`${ui.td} ${ui.stack.td}`}>{d.hasPassword ? <Pill tone="positive">Tersimpan</Pill> : <span className="text-muted">Tidak ada</span>}</td>
+                    <td className={`${ui.td} ${ui.stack.td}`}>
+                      <div className="flex flex-wrap justify-end gap-1.5 max-sm:justify-start">
                         <button
                           className={ui.buttonSm}
                           disabled={s.busy}
