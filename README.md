@@ -120,7 +120,7 @@ Backend membaca `backend/.env` lalu `.env` di root repo; variabel environment ya
 | `SESSION_ABSOLUTE_TIMEOUT` | `8h` | Batas umur session, apa pun aktivitasnya. |
 | `SESSION_ROTATION_INTERVAL` | `15m` | Identifier session diganti secara berkala. |
 | `SESSION_GRACE_PERIOD` | `30s` | Identifier lama masih diterima sesaat setelah rotasi. Urutannya harus grace < rotation < idle < absolute. |
-| `SESSION_CLEANUP_INTERVAL` | `1m` | Seberapa sering session kedaluwarsa dibersihkan dari memori. |
+| `SESSION_CLEANUP_INTERVAL` | `1m` | Seberapa sering session kedaluwarsa dihapus dari database. |
 | `FRONTEND_DIR` | `../frontend/dist` | Folder hasil build SPA yang disajikan backend, relatif terhadap folder tempat server dijalankan (`backend/`). |
 | `TARGET_QUERY_TIMEOUT` | `5s` | Batas waktu koneksi dan query explorer ke database target. |
 | `MIGRATION_LOCK_TIMEOUT` | `5s` | `lock_timeout` saat migration berjalan. |
@@ -142,7 +142,7 @@ docker compose up -d --wait
 cd backend && go run ./cmd/server
 ```
 
-Setelah mengubah kode frontend, bangun ulang dengan `cd frontend && bun run build`. Session hanya ada di memori server: setiap restart backend semua pengguna harus login lagi.
+Setelah mengubah kode frontend, bangun ulang dengan `cd frontend && bun run build`. Session tersimpan di database platform, jadi pengguna tetap masuk setelah backend di-restart (selama belum melewati timeout).
 
 ## Test
 
@@ -210,7 +210,7 @@ Request → middleware (Origin + Content-Type → RequireAuth + CSRF → Require
 | Package | Tanggung jawab |
 | --- | --- |
 | `config` | Membaca dan memvalidasi environment; server menolak start bila konfigurasi wajib tidak valid. |
-| `auth`, `session` | Login, hashing password, seed admin, session in-memory, rotasi, CSRF. |
+| `auth`, `session` | Login, hashing password, seed admin, session di database platform, rotasi, CSRF. |
 | `authz` | Policy Decision Point: daftar aksi, level minimum, dan rumus akses efektif. |
 | `admin` | User, role, group, keanggotaan, dan grant. |
 | `dbconn` | Koneksi database target: enkripsi kredensial, pool, uji koneksi. |
@@ -243,8 +243,10 @@ default*: aksi yang tidak dikenal dan kegagalan lookup akses selalu ditolak.
 
 ### 4. Session
 
-Session disimpan di memori proses backend. Map berisi hash SHA-256 dari identifier, dengan indeks per user untuk pencabutan
-massal, dilindungi satu mutex. Goroutine pembersih menghapus session kedaluwarsa setiap `SESSION_CLEANUP_INTERVAL`.
+Session disimpan di table `sessions` pada database platform, satu baris per login, sehingga tetap berlaku setelah backend
+di-restart dan tidak terikat pada satu proses. Kolomnya hanya berisi hash SHA-256 dari identifier (bukan identifier mentah),
+`user_id` dengan `ON DELETE CASCADE`, token CSRF, dan waktu. Goroutine pembersih menghapus baris kedaluwarsa setiap
+`SESSION_CLEANUP_INTERVAL`.
 
 - **Identifier (spek):** 32 byte dari `crypto/rand`, di-encode base64url, opaque. Server hanya menyimpan hash-nya; hash
   tanpa salt cukup karena identifier sudah berentropi tinggi, dan salt akan membuat lookup mustahil.
@@ -274,8 +276,20 @@ Hubungan yang divalidasi saat startup: grace < rotasi < idle < absolute. Untuk d
    tersebut ditandai dan dirotasi pada request berikutnya. Hak baru sendiri berlaku seketika.
 
 Saat rotasi, identifier lama tetap diterima selama grace period dan setiap response untuknya mengirim ulang identifier baru;
-setelah grace period identifier lama ditolak **(spek)**. Pemeriksaan dan pembuatan identifier baru terjadi di bawah satu
-lock, sehingga dua request paralel tidak menghasilkan dua penerus.
+setelah grace period identifier lama ditolak **(spek)**.
+
+- **Identifier pengganti tidak bisa disimpan sebagai hash saja**, karena response untuk cookie lama harus mengirim ulang nilai
+  mentahnya. Selama grace period nilai itu disimpan terenkripsi AES-GCM (kunci `CREDENTIALS_KEY`) di baris session dan
+  dikosongkan setelah grace berakhir.
+- **Rotasi atomik lewat compare-and-set:** `UPDATE ... WHERE id = ? AND current_hash = <hash yang dibaca>`. Hanya satu request
+  paralel yang berhasil (`RowsAffected = 1`); yang kalah membaca ulang dan mengambil jalur grace, sehingga semua menerima
+  pengganti yang sama.
+- **Satu baris menyimpan satu identifier pendahulu.** Rotasi yang terjadi di dalam grace period (misalnya karena perubahan hak)
+  tetap dijalankan pada request berikutnya, dan identifier dari dua rotasi sebelumnya langsung tidak berlaku.
+- **`last_seen` ditulis paling sering sekali per menit** (atau `SESSION_IDLE_TIMEOUT / 10` bila lebih kecil), bukan di setiap
+  request, supaya polling dari SPA tidak menjadi satu tulis per request. Akibatnya session dapat kedaluwarsa paling lama
+  selisih itu lebih cepat, tidak pernah lebih lambat.
+- Pencabutan menghapus baris, sehingga identifier yang masih dalam grace ikut tidak berlaku.
 
 **Pencabutan session (spek).**
 
@@ -474,10 +488,10 @@ Setiap error memakai bentuk yang sama:
 
 ### 13. Strategi pengujian
 
-- **Unit test** di samping kode yang diuji, untuk logika padat aturan: `authz`, `sqlguard`, session store (dengan jam yang
-  dapat diinjeksi), enkripsi kredensial, pagination, pemetaan error, dan konfigurasi.
+- **Unit test** di samping kode yang diuji, untuk logika padat aturan: `authz`, `sqlguard`, enkripsi kredensial, pagination, pemetaan error, dan konfigurasi.
 - **Integration test** (build tag `integration`) terhadap PostgreSQL sungguhan di `test-pg`, sebagian besar melalui router
-  Gin dengan `httptest` tanpa menyalakan server, sesuai contoh di spesifikasi. Cakupannya meliputi login, logout, timeout
+  Gin dengan `httptest` tanpa menyalakan server, sesuai contoh di spesifikasi. Cakupannya meliputi login, logout, session store
+  (jam yang dapat diinjeksi; rotasi, grace, rotasi paralel, dan session yang tetap berlaku setelah store dibuat ulang), timeout
   dan rotasi session, CSRF dan `Origin`, seed admin, CRUD admin dan penolakan non-admin, akses efektif multi-group, IDOR,
   uji koneksi (termasuk kredensial salah dan peringatan superuser), explorer read-only, eksekusi sukses, multi-statement dan
   function, rollback, statement non-transaksional, concurrency, lock timeout, rekonsiliasi, dan analisis execution plan
@@ -486,8 +500,10 @@ Setiap error memakai bentuk yang sama:
 
 ### 14. Batasan yang disengaja
 
-- **Session in-memory:** restart backend mengeluarkan semua pengguna, dan backend harus berjalan sebagai satu instance
-  (lock migration per database juga berada di memori proses).
+- **Satu query database per request terautentikasi:** session dibaca dari database platform. Bila database platform tidak
+  dapat dihubungi, request terautentikasi ditolak `401`.
+- **Backend harus berjalan sebagai satu instance:** lock migration per database masih berada di memori proses. Session sendiri
+  sudah tidak terikat pada satu instance.
 - **Statement non-transaksional** seperti `CREATE INDEX CONCURRENTLY`, `VACUUM`, `CREATE DATABASE`, dan `ALTER SYSTEM`
   tidak didukung, karena setiap migration dijalankan dalam transaction agar dapat di-rollback. PostgreSQL menolaknya dengan
   SQLSTATE `25001`, dan platform menampilkan penjelasan yang mudah dipahami. Body function standar SQL (`BEGIN ATOMIC`) juga
