@@ -20,7 +20,7 @@ func TestAdminEffectsOnRealSessions(t *testing.T) {
 	db := testutil.PlatformDB(t)
 	a := testutil.CreateAdmin(t, db, "admin")
 	u := testutil.CreateUser(t, db, "member")
-	store := session.New(session.Config{IdleTimeout: time.Hour, AbsoluteTimeout: 8 * time.Hour, RotationInterval: 15 * time.Minute, GracePeriod: 30 * time.Second}, nil)
+	store := session.New(db, testSessionCipher(t), session.Config{IdleTimeout: time.Hour, AbsoluteTimeout: 8 * time.Hour, RotationInterval: 15 * time.Minute, GracePeriod: 30 * time.Second}, nil)
 	defer store.Close()
 	as := &auth.Service{DB: db, Sessions: store}
 	svc := admin.New(db, store)

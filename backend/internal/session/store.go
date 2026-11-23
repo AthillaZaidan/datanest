@@ -1,16 +1,29 @@
-// Package session provides the in-memory session store used by the HTTP API.
+// Package session stores HTTP sessions in the platform database, so they survive a restart.
 package session
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"log"
 	"sync"
 	"time"
+
+	"gorm.io/gorm"
+
+	"github.com/AthillaZaidan/datanest/backend/internal/models"
 )
 
 var ErrInvalid = errors.New("invalid session")
+
+const (
+	queryTimeout = 5 * time.Second
+	// Another request may rotate the same session between our read and our update.
+	maxAttempts = 3
+)
 
 type Config struct {
 	IdleTimeout      time.Duration
@@ -18,6 +31,12 @@ type Config struct {
 	RotationInterval time.Duration
 	GracePeriod      time.Duration
 	CleanupInterval  time.Duration
+}
+
+// Cipher protects the replacement identifier while a rotation is in its grace period.
+type Cipher interface {
+	Encrypt(plaintext string) ([]byte, error)
+	Decrypt(data []byte) (string, error)
 }
 
 // Session deliberately stores identity only. Authorization is read from the
@@ -28,32 +47,29 @@ type Session struct {
 	LastSeen      time.Time
 	LastRotatedAt time.Time
 	NeedsRotation bool
-	Revoked       bool
 	CSRFToken     string
-	currentKey    [sha256.Size]byte
-}
-
-type entry struct {
-	session      *Session
-	graceUntil   time.Time
-	successorRaw string
 }
 
 type Store struct {
-	mu       sync.Mutex
-	cfg      Config
-	now      func() time.Time
-	entries  map[[sha256.Size]byte]*entry
-	userKeys map[uint]map[[sha256.Size]byte]struct{}
-	stop     chan struct{}
-	once     sync.Once
+	db     *gorm.DB
+	cipher Cipher
+	cfg    Config
+	now    func() time.Time
+	// last_seen is written at most this often, not on every request.
+	touchEvery time.Duration
+	stop       chan struct{}
+	once       sync.Once
 }
 
-func New(cfg Config, clock func() time.Time) *Store {
+func New(db *gorm.DB, cipher Cipher, cfg Config, clock func() time.Time) *Store {
 	if clock == nil {
 		clock = time.Now
 	}
-	s := &Store{cfg: cfg, now: clock, entries: make(map[[sha256.Size]byte]*entry), userKeys: make(map[uint]map[[sha256.Size]byte]struct{}), stop: make(chan struct{})}
+	s := &Store{
+		db: db, cipher: cipher, cfg: cfg, now: clock,
+		touchEvery: min(time.Minute, cfg.IdleTimeout/10),
+		stop:       make(chan struct{}),
+	}
 	if cfg.CleanupInterval > 0 {
 		go s.cleanupLoop()
 	}
@@ -72,84 +88,131 @@ func (s *Store) Create(userID uint) (string, *Session, error) {
 		return "", nil, err
 	}
 	now := s.now()
-	sess := &Session{UserID: userID, CreatedAt: now, LastSeen: now, LastRotatedAt: now, CSRFToken: csrf, currentKey: key}
-	s.mu.Lock()
-	s.putLocked(key, &entry{session: sess})
-	s.mu.Unlock()
-	return raw, sess, nil
+	row := models.Session{
+		UserID: userID, CurrentHash: key[:], CSRFToken: csrf,
+		CreatedAt: now, LastSeen: now, LastRotatedAt: now,
+	}
+	ctx, cancel := queryContext()
+	defer cancel()
+	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
+		return "", nil, err
+	}
+	return raw, toSession(&row), nil
 }
 
 // Validate returns a replacement identifier when a cookie must be refreshed.
 // The replacement is returned for both a rotation and a valid grace cookie.
 func (s *Store) Validate(raw string) (*Session, string, error) {
-	key := hashRaw(raw)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := s.now()
-	e, ok := s.entries[key]
-	if !ok || !s.validLocked(e.session, now) {
-		if ok {
-			s.removeSessionLocked(e.session)
-		}
-		return nil, "", ErrInvalid
+	sess, next, err := s.validate(raw)
+	if err != nil && !errors.Is(err, ErrInvalid) {
+		log.Printf("session: validate: %v", err)
 	}
-	if !e.graceUntil.IsZero() {
-		if !now.Before(e.graceUntil) {
-			s.deleteKeyLocked(key)
+	return sess, next, err
+}
+
+func (s *Store) validate(raw string) (*Session, string, error) {
+	hash := hashRaw(raw)
+	ctx, cancel := queryContext()
+	defer cancel()
+
+	for range maxAttempts {
+		var row models.Session
+		err := s.db.WithContext(ctx).Where("current_hash = ? OR previous_hash = ?", hash[:], hash[:]).Take(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, "", ErrInvalid
 		}
-		e.session.LastSeen = now
-		return e.session, e.successorRaw, nil
-	}
-	if e.session.NeedsRotation || now.Sub(e.session.LastRotatedAt) > s.cfg.RotationInterval {
+		if err != nil {
+			return nil, "", err
+		}
+		now := s.now()
+		if !s.live(&row, now) {
+			if err := s.db.WithContext(ctx).Delete(&models.Session{}, row.ID).Error; err != nil {
+				return nil, "", err
+			}
+			return nil, "", ErrInvalid
+		}
+		if !bytes.Equal(row.CurrentHash, hash[:]) {
+			return s.viaGrace(ctx, &row, now)
+		}
+
+		// A rotation due to a privilege change must not wait, even inside a grace period. The
+		// row keeps one predecessor, so an identifier from two rotations ago is dropped.
+		due := row.NeedsRotation || now.Sub(row.LastRotatedAt) > s.cfg.RotationInterval
+		if !due {
+			s.touch(ctx, &row, now)
+			return toSession(&row), "", nil
+		}
+
 		nextRaw, nextKey, err := newIdentifier()
 		if err != nil {
 			return nil, "", err
 		}
-		e.graceUntil = now.Add(s.cfg.GracePeriod)
-		e.successorRaw = nextRaw
-		e.session.currentKey = nextKey
-		e.session.LastRotatedAt = now
-		e.session.NeedsRotation = false
-		s.putLocked(nextKey, &entry{session: e.session})
-		e.session.LastSeen = now
-		return e.session, nextRaw, nil
+		enc, err := s.cipher.Encrypt(nextRaw)
+		if err != nil {
+			return nil, "", err
+		}
+		// Compare-and-set on the identifier we read: exactly one concurrent request wins.
+		res := s.db.WithContext(ctx).Model(&models.Session{}).
+			Where("id = ? AND current_hash = ?", row.ID, hash[:]).
+			Updates(map[string]any{
+				"previous_hash":   hash[:],
+				"current_hash":    nextKey[:],
+				"successor_enc":   enc,
+				"grace_until":     now.Add(s.cfg.GracePeriod),
+				"last_rotated_at": now,
+				"last_seen":       now,
+				"needs_rotation":  false,
+			})
+		if res.Error != nil {
+			return nil, "", res.Error
+		}
+		if res.RowsAffected == 1 {
+			row.LastRotatedAt, row.LastSeen, row.NeedsRotation = now, now, false
+			return toSession(&row), nextRaw, nil
+		}
+		// Lost the race: read again. Our identifier is now the previous one, so the next
+		// pass takes the grace path and returns the winner's replacement.
 	}
-	e.session.LastSeen = now
-	return e.session, "", nil
+	return nil, "", errors.New("session: rotation contention")
+}
+
+// viaGrace serves a request that still carries the identifier replaced by a rotation.
+func (s *Store) viaGrace(ctx context.Context, row *models.Session, now time.Time) (*Session, string, error) {
+	if row.GraceUntil == nil || !now.Before(*row.GraceUntil) || len(row.SuccessorEnc) == 0 {
+		return nil, "", ErrInvalid
+	}
+	next, err := s.cipher.Decrypt(row.SuccessorEnc)
+	if err != nil {
+		return nil, "", err
+	}
+	s.touch(ctx, row, now)
+	return toSession(row), next, nil
 }
 
 func (s *Store) Revoke(raw string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if e := s.entries[hashRaw(raw)]; e != nil {
-		e.session.Revoked = true
-		s.removeSessionLocked(e.session)
+	hash := hashRaw(raw)
+	ctx, cancel := queryContext()
+	defer cancel()
+	err := s.db.WithContext(ctx).Where("current_hash = ? OR previous_hash = ?", hash[:], hash[:]).Delete(&models.Session{}).Error
+	if err != nil {
+		log.Printf("session: revoke: %v", err)
 	}
 }
 
 func (s *Store) RevokeAllForUser(userID uint) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for key := range s.userKeys[userID] {
-		if e := s.entries[key]; e != nil {
-			e.session.Revoked = true
-			s.removeSessionLocked(e.session)
-		}
+	ctx, cancel := queryContext()
+	defer cancel()
+	if err := s.db.WithContext(ctx).Where("user_id = ?", userID).Delete(&models.Session{}).Error; err != nil {
+		log.Printf("session: revoke all for user %d: %v", userID, err)
 	}
 }
 
 func (s *Store) MarkNeedsRotation(userID uint) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	seen := make(map[*Session]struct{})
-	for key := range s.userKeys[userID] {
-		if e := s.entries[key]; e != nil {
-			if _, ok := seen[e.session]; !ok {
-				e.session.NeedsRotation = true
-				seen[e.session] = struct{}{}
-			}
-		}
+	ctx, cancel := queryContext()
+	defer cancel()
+	err := s.db.WithContext(ctx).Model(&models.Session{}).Where("user_id = ?", userID).Update("needs_rotation", true).Error
+	if err != nil {
+		log.Printf("session: mark rotation for user %d: %v", userID, err)
 	}
 }
 
@@ -166,47 +229,56 @@ func (s *Store) cleanupLoop() {
 	}
 }
 
+// Cleanup deletes expired sessions and clears grace data that is no longer usable.
 func (s *Store) Cleanup() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, cancel := queryContext()
+	defer cancel()
 	now := s.now()
-	for key, e := range s.entries {
-		if !s.validLocked(e.session, now) {
-			s.removeSessionLocked(e.session)
-			continue
-		}
-		if !e.graceUntil.IsZero() && !now.Before(e.graceUntil) {
-			s.deleteKeyLocked(key)
-		}
+	err := s.db.WithContext(ctx).
+		Where("last_seen < ? OR created_at < ?", now.Add(-s.cfg.IdleTimeout), now.Add(-s.cfg.AbsoluteTimeout)).
+		Delete(&models.Session{}).Error
+	if err != nil {
+		log.Printf("session: cleanup: %v", err)
+		return
+	}
+	err = s.db.WithContext(ctx).Model(&models.Session{}).
+		Where("grace_until IS NOT NULL AND grace_until <= ?", now).
+		Updates(map[string]any{"previous_hash": nil, "successor_enc": nil, "grace_until": nil}).Error
+	if err != nil {
+		log.Printf("session: cleanup grace: %v", err)
 	}
 }
 
-func (s *Store) validLocked(sess *Session, now time.Time) bool {
-	return !sess.Revoked && now.Sub(sess.LastSeen) <= s.cfg.IdleTimeout && now.Sub(sess.CreatedAt) <= s.cfg.AbsoluteTimeout
+// live uses the stored last_seen, which can lag the real last request by up to touchEvery,
+// so a session may expire that much early but never late.
+func (s *Store) live(r *models.Session, now time.Time) bool {
+	return now.Sub(r.LastSeen) <= s.cfg.IdleTimeout && now.Sub(r.CreatedAt) <= s.cfg.AbsoluteTimeout
 }
-func (s *Store) putLocked(key [sha256.Size]byte, e *entry) {
-	s.entries[key] = e
-	if s.userKeys[e.session.UserID] == nil {
-		s.userKeys[e.session.UserID] = make(map[[sha256.Size]byte]struct{})
+
+// touch is best effort: a failed write must not reject a valid request.
+func (s *Store) touch(ctx context.Context, row *models.Session, now time.Time) {
+	if now.Sub(row.LastSeen) < s.touchEvery {
+		return
 	}
-	s.userKeys[e.session.UserID][key] = struct{}{}
+	err := s.db.WithContext(ctx).Model(&models.Session{}).Where("id = ?", row.ID).Update("last_seen", now).Error
+	if err != nil {
+		log.Printf("session: touch: %v", err)
+		return
+	}
+	row.LastSeen = now
 }
-func (s *Store) deleteKeyLocked(key [sha256.Size]byte) {
-	if e := s.entries[key]; e != nil {
-		delete(s.entries, key)
-		delete(s.userKeys[e.session.UserID], key)
-		if len(s.userKeys[e.session.UserID]) == 0 {
-			delete(s.userKeys, e.session.UserID)
-		}
+
+func toSession(r *models.Session) *Session {
+	return &Session{
+		UserID: r.UserID, CreatedAt: r.CreatedAt, LastSeen: r.LastSeen,
+		LastRotatedAt: r.LastRotatedAt, NeedsRotation: r.NeedsRotation, CSRFToken: r.CSRFToken,
 	}
 }
-func (s *Store) removeSessionLocked(sess *Session) {
-	for key, e := range s.entries {
-		if e.session == sess {
-			s.deleteKeyLocked(key)
-		}
-	}
+
+func queryContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), queryTimeout)
 }
+
 func newIdentifier() (string, [sha256.Size]byte, error) {
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -215,4 +287,5 @@ func newIdentifier() (string, [sha256.Size]byte, error) {
 	raw := base64.RawURLEncoding.EncodeToString(b[:])
 	return raw, hashRaw(raw), nil
 }
+
 func hashRaw(raw string) [sha256.Size]byte { return sha256.Sum256([]byte(raw)) }

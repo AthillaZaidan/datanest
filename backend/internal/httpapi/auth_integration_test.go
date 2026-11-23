@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/auth"
+	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
 	"github.com/AthillaZaidan/datanest/backend/internal/session"
 	"github.com/AthillaZaidan/datanest/backend/internal/testutil"
 )
@@ -39,7 +40,7 @@ func newAuthEnv(t *testing.T, cfg session.Config) *authEnv {
 	db := testutil.PlatformDB(t)
 	testutil.CreateUser(t, db, "ayu")
 	c := newClock()
-	store := session.New(cfg, c.Now)
+	store := session.New(db, testSessionCipher(t), cfg, c.Now)
 	t.Cleanup(store.Close)
 	s := &auth.Service{DB: db, Sessions: store}
 	r := NewRouter(Deps{
@@ -47,6 +48,15 @@ func newAuthEnv(t *testing.T, cfg session.Config) *authEnv {
 		Login: s.Login, Logout: s.Logout, Me: s.Me,
 	})
 	return &authEnv{t: t, router: r, clock: c}
+}
+
+func testSessionCipher(t *testing.T) *dbconn.Cipher {
+	t.Helper()
+	c, err := dbconn.NewCipher(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
 
 func defaultSessions() session.Config {

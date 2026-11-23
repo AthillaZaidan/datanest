@@ -62,14 +62,14 @@ func run() error {
 	if err := auth.SeedAdmin(db, cfg.AdminUsername, cfg.AdminPassword); err != nil {
 		return err
 	}
-	sessions := session.New(session.Config(cfg.Session), nil)
-	defer sessions.Close()
-	authService := &auth.Service{DB: db, Sessions: sessions, CookieSecure: cfg.CookieSecure}
-
 	credentialCipher, err := dbconn.NewCipher(cfg.CredentialsKey)
 	if err != nil {
 		return err
 	}
+	sessions := session.New(db, credentialCipher, session.Config(cfg.Session), nil)
+	defer sessions.Close()
+	authService := &auth.Service{DB: db, Sessions: sessions, CookieSecure: cfg.CookieSecure}
+
 	pools := dbconn.NewPools(db, credentialCipher, cfg.Target.QueryTimeout)
 	defer pools.Close()
 	az := authz.New(db)
