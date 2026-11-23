@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/AthillaZaidan/datanest/backend/internal/session"
 	"github.com/gin-gonic/gin"
 )
 
@@ -34,8 +33,7 @@ func TestConstantEqual(t *testing.T) {
 	}
 }
 func TestCookieAttributes(t *testing.T) {
-	s := &Service{Sessions: session.New(session.Config{}, nil), CookieSecure: true}
-	defer s.Sessions.Close()
+	s := &Service{CookieSecure: true}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
 	s.setCookie(c, "value")
