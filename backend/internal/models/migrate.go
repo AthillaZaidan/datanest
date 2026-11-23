@@ -6,6 +6,7 @@ import "gorm.io/gorm"
 func All() []any {
 	return []any{
 		&User{},
+		&Session{},
 		&Role{},
 		&UserRole{},
 		&Group{},

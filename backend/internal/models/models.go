@@ -14,6 +14,29 @@ type User struct {
 	UpdatedAt    time.Time
 }
 
+// Session is one login. Identifiers are stored only as SHA-256 hashes. While a rotation is
+// in its grace period the row holds two: the current one and the previous one, and
+// SuccessorEnc is the encrypted raw current identifier, so a request that still carries the
+// previous one can be handed its replacement again.
+type Session struct {
+	ID     uint `gorm:"primaryKey"`
+	UserID uint `gorm:"not null;index"`
+	User   User `gorm:"constraint:OnDelete:CASCADE"`
+
+	CurrentHash []byte `gorm:"type:bytea;not null;uniqueIndex"`
+	// All three are NULL outside a grace period.
+	PreviousHash []byte     `gorm:"type:bytea;uniqueIndex"`
+	GraceUntil   *time.Time `gorm:"index"`
+	SuccessorEnc []byte     `gorm:"type:bytea"`
+
+	CSRFToken     string `gorm:"not null"`
+	NeedsRotation bool   `gorm:"not null;default:false"`
+
+	CreatedAt     time.Time `gorm:"not null"`
+	LastSeen      time.Time `gorm:"not null"`
+	LastRotatedAt time.Time `gorm:"not null"`
+}
+
 type Role struct {
 	ID   uint   `gorm:"primaryKey"`
 	Name string `gorm:"size:64;not null;uniqueIndex"`
