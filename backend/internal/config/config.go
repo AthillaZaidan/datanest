@@ -30,6 +30,16 @@ type Config struct {
 
 	Session SessionConfig
 	Target  TargetConfig
+	Worker  WorkerConfig
+}
+
+type WorkerConfig struct {
+	Concurrency       int
+	MaxAttempts       int
+	LeaseTTL          time.Duration
+	HeartbeatInterval time.Duration
+	SweepInterval     time.Duration
+	RepublishAfter    time.Duration
 }
 
 // Invariant: grace < rotation < idle < absolute.
@@ -79,6 +89,14 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 			MigrationExecTimeout:      r.duration("MIGRATION_EXEC_TIMEOUT", 2*time.Minute),
 		},
 	}
+	cfg.Worker = WorkerConfig{
+		Concurrency:       r.integer("WORKER_CONCURRENCY", 4),
+		MaxAttempts:       r.integer("WORKER_MAX_ATTEMPTS", 3),
+		LeaseTTL:          r.duration("WORKER_LEASE", 30*time.Second),
+		HeartbeatInterval: r.duration("WORKER_HEARTBEAT", 10*time.Second),
+		SweepInterval:     r.duration("WORKER_SWEEP_INTERVAL", 5*time.Second),
+		RepublishAfter:    r.duration("WORKER_REPUBLISH_AFTER", 30*time.Second),
+	}
 	cfg.CredentialsKey = r.credentialsKey("CREDENTIALS_KEY")
 
 	if cfg.PlatformDSN == "" {
@@ -87,6 +105,10 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 	s := cfg.Session
 	if !(s.GracePeriod < s.RotationInterval && s.RotationInterval < s.IdleTimeout && s.IdleTimeout < s.AbsoluteTimeout) {
 		r.fail("session timeouts must satisfy SESSION_GRACE_PERIOD < SESSION_ROTATION_INTERVAL < SESSION_IDLE_TIMEOUT < SESSION_ABSOLUTE_TIMEOUT")
+	}
+
+	if cfg.Worker.HeartbeatInterval >= cfg.Worker.LeaseTTL {
+		r.fail("WORKER_HEARTBEAT must be shorter than WORKER_LEASE")
 	}
 
 	if err := errors.Join(r.errs...); err != nil {
@@ -122,6 +144,19 @@ func (r *reader) boolean(key string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+func (r *reader) integer(key string, def int) int {
+	v, ok := r.lookup(key)
+	if !ok || v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		r.fail("%s: must be a positive integer, got %q", key, v)
+		return def
+	}
+	return n
 }
 
 func (r *reader) duration(key string, def time.Duration) time.Duration {
