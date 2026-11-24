@@ -20,6 +20,7 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/config"
 	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
+	"github.com/AthillaZaidan/datanest/backend/internal/execution"
 	"github.com/AthillaZaidan/datanest/backend/internal/explorer"
 	"github.com/AthillaZaidan/datanest/backend/internal/httpapi"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration"
@@ -83,7 +84,8 @@ func run() error {
 	}
 	router := httpapi.NewRouter(httpapi.Deps{
 		Admin: adminService, Databases: databaseService, Explorer: explorerService, Migrations: migrationService,
-		Security: auth.ValidateStateRequest(cfg.AllowedOrigin), RequireAuth: authService.RequireAuth,
+		Executions: execution.NewService(db, az),
+		Security:   auth.ValidateStateRequest(cfg.AllowedOrigin), RequireAuth: authService.RequireAuth,
 		RequireAdmin: authService.RequireAdmin, Login: authService.Login, Logout: authService.Logout, Me: authService.Me,
 	})
 	httpapi.ServeSPA(router, cfg.FrontendDir)
