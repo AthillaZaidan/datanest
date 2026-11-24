@@ -4,6 +4,7 @@ package httpapi
 import (
 	"github.com/AthillaZaidan/datanest/backend/internal/admin"
 	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
+	"github.com/AthillaZaidan/datanest/backend/internal/execution"
 	"log"
 	"net/http"
 
@@ -27,6 +28,7 @@ type Deps struct {
 	Me           gin.HandlerFunc
 	Explorer     *explorer.Service
 	Migrations   *migration.Service
+	Executions   *execution.Service
 }
 
 func NewRouter(d Deps) *gin.Engine {
@@ -45,6 +47,11 @@ func NewRouter(d Deps) *gin.Engine {
 		h := migrationHandlers{svc: d.Migrations}
 		listMig, createMig, getMig, updateMig, deleteMig, executeMig, duplicateMig, explainMig = h.list, h.create,
 			h.get, h.update, h.delete, h.execute, h.duplicate, h.explain
+	}
+
+	getExec := notImplemented
+	if d.Executions != nil {
+		getExec = executionHandlers{svc: d.Executions}.get
 	}
 
 	ah := adminHandlers{svc: d.Admin}
@@ -121,6 +128,8 @@ func NewRouter(d Deps) *gin.Engine {
 	user.POST("/migrations/:migrationId/execute", executeMig)
 	user.POST("/migrations/:migrationId/duplicate", duplicateMig)
 	user.POST("/migrations/:migrationId/explain", explainMig)
+
+	user.GET("/executions/:executionId", getExec)
 
 	return r
 }
