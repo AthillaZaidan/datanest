@@ -130,3 +130,52 @@ func TestAMQPURLIsOptional(t *testing.T) {
 		t.Errorf("AMQPURL = %q", cfg.AMQPURL)
 	}
 }
+
+func TestWorkerDefaults(t *testing.T) {
+	cfg, err := FromLookup(env(minimal()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := WorkerConfig{Concurrency: 4, MaxAttempts: 3, LeaseTTL: 30 * time.Second, HeartbeatInterval: 10 * time.Second, SweepInterval: 5 * time.Second, RepublishAfter: 30 * time.Second}
+	if cfg.Worker != want {
+		t.Errorf("worker config = %+v, want %+v", cfg.Worker, want)
+	}
+}
+
+func TestWorkerSettingsAreValidated(t *testing.T) {
+	cases := []struct {
+		name string
+		set  map[string]string
+		want string
+	}{
+		{"zero concurrency", map[string]string{"WORKER_CONCURRENCY": "0"}, "WORKER_CONCURRENCY"},
+		{"not a number", map[string]string{"WORKER_MAX_ATTEMPTS": "many"}, "WORKER_MAX_ATTEMPTS"},
+		{"heartbeat not shorter than the lease", map[string]string{"WORKER_HEARTBEAT": "30s", "WORKER_LEASE": "30s"}, "WORKER_HEARTBEAT must be shorter"},
+		{"bad duration", map[string]string{"WORKER_SWEEP_INTERVAL": "soon"}, "WORKER_SWEEP_INTERVAL"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := minimal()
+			for k, v := range c.set {
+				m[k] = v
+			}
+			if _, err := FromLookup(env(m)); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error = %v, want it to mention %q", err, c.want)
+			}
+		})
+	}
+}
+
+func TestWorkerSettingsAreRead(t *testing.T) {
+	m := minimal()
+	m["WORKER_CONCURRENCY"] = "9"
+	m["WORKER_LEASE"] = "1m"
+	m["WORKER_HEARTBEAT"] = "20s"
+	cfg, err := FromLookup(env(m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Worker.Concurrency != 9 || cfg.Worker.LeaseTTL != time.Minute || cfg.Worker.HeartbeatInterval != 20*time.Second {
+		t.Errorf("worker config = %+v", cfg.Worker)
+	}
+}
