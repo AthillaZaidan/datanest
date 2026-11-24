@@ -112,6 +112,16 @@ func TestTransientFailuresAreRetriedUpToTheLimit(t *testing.T) {
 	if got.Attempts != 3 || !strings.Contains(got.ErrorMessage, "Gagal setelah 3 percobaan") {
 		t.Errorf("row = %+v", got)
 	}
+	for _, leak := range []string{"refused", "connection", "localhost", "127.0.0.1"} {
+		if strings.Contains(strings.ToLower(got.ErrorMessage), leak) {
+			t.Errorf("the error shown to every viewer leaks driver detail %q: %s", leak, got.ErrorMessage)
+		}
+	}
+	for _, a := range e.attempts(x.ID) {
+		if strings.Contains(strings.ToLower(a.ErrorMessage), "refused") {
+			t.Errorf("attempt %d leaks driver detail: %s", a.Number, a.ErrorMessage)
+		}
+	}
 	if n := len(e.attempts(x.ID)); n != 3 {
 		t.Errorf("attempt rows = %d, want 3", n)
 	}
