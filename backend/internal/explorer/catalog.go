@@ -14,6 +14,8 @@ import (
 // hiddenTable is the platform's migration ledger; users never see it.
 const hiddenTable = migration.LedgerTable
 
+const hiddenExecutionTable = migration.ExecutionLedgerTable
+
 type Schema struct {
 	Name string `json:"name"`
 }
@@ -100,8 +102,8 @@ func (s *Service) ListTables(ctx context.Context, userID, databaseID uint, schem
 
 		rows, err := tx.QueryContext(ctx, `
 			SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-			WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') AND NOT (n.nspname = 'public' AND c.relname = $2)
-			ORDER BY c.relname`, schema, hiddenTable)
+			WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') AND NOT (n.nspname = 'public' AND c.relname IN ($2, $3))
+			ORDER BY c.relname`, schema, hiddenTable, hiddenExecutionTable)
 		if err != nil {
 			return err
 		}
@@ -146,8 +148,8 @@ func tableOID(ctx context.Context, tx *sql.Tx, schema, table string) (uint32, er
 	err := tx.QueryRowContext(ctx, `
 		SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p')
-			AND `+userSchemaFilter+` AND NOT (n.nspname = 'public' AND c.relname = $3)`,
-		schema, table, hiddenTable).Scan(&oid)
+			AND `+userSchemaFilter+` AND NOT (n.nspname = 'public' AND c.relname IN ($3, $4))`,
+		schema, table, hiddenTable, hiddenExecutionTable).Scan(&oid)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, errTableNotFound
 	}
