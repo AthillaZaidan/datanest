@@ -603,6 +603,9 @@ kebenaran dibaca dari ledger.
 - Platform tidak memeriksa apakah data masih aman di-undo. SQL down yang benar adalah tanggung jawab penulis migration,
   dan migration yang tidak dapat dipulihkan harus ditandai irreversible.
 - Kolom batch hanya bilangan bulat; satu statement per batch (tanpa multi-statement).
+- Worker memakai batas waktu yang sama dengan eksekusi M1 (`MIGRATION_STATEMENT_TIMEOUT` 60 detik dan `MIGRATION_EXEC_TIMEOUT` 2 menit)
+  untuk satu transaction. Migration mode normal yang lebih lama dari itu gagal dengan `TIMEOUT` walau dijalankan asynchronous;
+  untuk data besar gunakan mode per-batch, yang batas waktunya berlaku per batch.
 - Sweeper berjalan di dalam worker: bila semua worker mati, pekerjaan menunggu sampai ada worker yang hidup lagi.
 - Tidak ada dead-letter queue; execution yang gagal tetap tersimpan sebagai baris `failed` yang dapat dilihat dan di-forward ulang.
 - Tombol "Jalankan" M1 (`POST /api/migrations/:id/execute`) masih sinkron sampai alur pengajuan dan approval menggantikannya;
