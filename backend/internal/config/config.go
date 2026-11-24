@@ -19,6 +19,8 @@ type Config struct {
 
 	PlatformDSN string
 
+	AMQPURL string
+
 	// Seed the first Platform Admin when none exists.
 	AdminUsername string
 	AdminPassword string
@@ -60,6 +62,7 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 		CookieSecure:  r.boolean("COOKIE_SECURE", false),
 		FrontendDir:   r.str("FRONTEND_DIR", "../frontend/dist"),
 		PlatformDSN:   r.str("PLATFORM_DSN", ""),
+		AMQPURL:       r.str("AMQP_URL", ""),
 		AdminUsername: r.str("ADMIN_USERNAME", ""),
 		AdminPassword: r.str("ADMIN_PASSWORD", ""),
 		Session: SessionConfig{
