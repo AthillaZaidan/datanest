@@ -90,6 +90,15 @@ type Grant struct {
 	Database  DatabaseConnection `gorm:"foreignKey:DatabaseID;constraint:OnDelete:CASCADE"`
 }
 
+type DatabaseLock struct {
+	DatabaseID  uint               `gorm:"primaryKey;autoIncrement:false"`
+	Database    DatabaseConnection `gorm:"foreignKey:DatabaseID;constraint:OnDelete:CASCADE"`
+	ExecutionID uint               `gorm:"not null"`
+	Owner       string             `gorm:"size:128;not null"`
+	Token       int64              `gorm:"not null"`
+	LeaseUntil  time.Time          `gorm:"not null"`
+}
+
 type MigrationStatus string
 
 const (

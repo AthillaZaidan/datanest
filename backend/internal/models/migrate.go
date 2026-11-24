@@ -14,6 +14,7 @@ func All() []any {
 		&DatabaseConnection{},
 		&Grant{},
 		&Migration{},
+		&DatabaseLock{},
 	}
 }
 
