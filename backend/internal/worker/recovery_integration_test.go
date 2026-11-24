@@ -5,6 +5,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,6 +30,9 @@ func TestACommitThatActuallyHappenedIsRecoveredFromTheLedger(t *testing.T) {
 	got := e.expectStatus(x.ID, models.ExecUncertain)
 	if got.ErrorCode != "COMMIT_UNKNOWN" || e.lockHeld(e.conn.ID) || e.sumQty() != 95 {
 		t.Fatalf("row = %+v, sum %d", got, e.sumQty())
+	}
+	if strings.Contains(got.ErrorMessage, "injected") {
+		t.Errorf("the commit error text reached the row: %s", got.ErrorMessage)
 	}
 	if attempts := e.attempts(x.ID); len(attempts) != 1 || attempts[0].Status != models.AttemptUncertain {
 		t.Errorf("attempts = %+v", attempts)
