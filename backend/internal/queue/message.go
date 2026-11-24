@@ -14,10 +14,15 @@ const traceparentHeader = "traceparent"
 
 const dialTimeout = 5 * time.Second
 
+type Job struct {
+	ExecutionID   uint
+	Traceparent   string
+	CorrelationID string
+}
+
 type Message struct {
-	ExecutionID uint
-	Traceparent string
-	delivery    amqp.Delivery
+	Job
+	delivery amqp.Delivery
 }
 
 func (m Message) Ack() error { return m.delivery.Ack(false) }
@@ -42,5 +47,5 @@ func parse(d amqp.Delivery) (Message, error) {
 		return Message{}, fmt.Errorf("body %q is not an execution id: %w", d.Body, err)
 	}
 	traceparent, _ := d.Headers[traceparentHeader].(string)
-	return Message{ExecutionID: uint(id), Traceparent: traceparent, delivery: d}, nil
+	return Message{Job: Job{ExecutionID: uint(id), Traceparent: traceparent, CorrelationID: d.CorrelationId}, delivery: d}, nil
 }
