@@ -144,3 +144,31 @@ func mustCreate(t *testing.T, db *gorm.DB, v any) {
 		t.Fatalf("create %T: %v", v, err)
 	}
 }
+
+func CreateMigration(t *testing.T, db *gorm.DB, databaseID uint) models.Migration {
+	t.Helper()
+	m := models.Migration{DatabaseID: databaseID, SQL: "SELECT 1", CreatedByUsername: "tester"}
+	mustCreate(t, db, &m)
+	return m
+}
+
+func CreateExecution(t *testing.T, db *gorm.DB, e models.MigrationExecution) models.MigrationExecution {
+	t.Helper()
+	if e.MigrationID == 0 {
+		e.MigrationID = CreateMigration(t, db, e.DatabaseID).ID
+	}
+	if e.Kind == "" {
+		e.Kind = models.ExecKindRun
+	}
+	if e.Status == "" {
+		e.Status = models.ExecQueued
+	}
+	if e.Mode == "" {
+		e.Mode = models.ExecModeNormal
+	}
+	if e.SQLExecuted == "" {
+		e.SQLExecuted = "SELECT 1"
+	}
+	mustCreate(t, db, &e)
+	return e
+}
