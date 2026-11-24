@@ -87,12 +87,13 @@ func publish(t *testing.T, p *Publisher, executionID uint, traceparent string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
-	if err := p.Publish(ctx, executionID, traceparent); err != nil {
+	job := Job{ExecutionID: executionID, Traceparent: traceparent, CorrelationID: fmt.Sprintf("corr-%d", executionID)}
+	if err := p.Publish(ctx, job); err != nil {
 		t.Fatalf("publish %d: %v", executionID, err)
 	}
 }
 
-func TestPublishThenConsumeCarriesTheIDAndTraceparent(t *testing.T) {
+func TestPublishThenConsumeCarriesTheIDTraceparentAndCorrelationID(t *testing.T) {
 	url := brokerURL(t)
 	queue := freshQueue(t, url)
 	p := NewPublisher(url, queue)
@@ -103,7 +104,7 @@ func TestPublishThenConsumeCarriesTheIDAndTraceparent(t *testing.T) {
 	publish(t, p, 57, "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
 
 	m := receive(t, got)
-	if m.ExecutionID != 57 || m.Traceparent != "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01" {
+	if m.ExecutionID != 57 || m.Traceparent != "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01" || m.CorrelationID != "corr-57" {
 		t.Errorf("message = %+v", m)
 	}
 }

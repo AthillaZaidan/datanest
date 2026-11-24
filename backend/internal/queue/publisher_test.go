@@ -12,7 +12,7 @@ func TestPublishToAnUnreachableBrokerFails(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := p.Publish(ctx, 1, ""); err == nil {
+	if err := p.Publish(ctx, Job{ExecutionID: 1}); err == nil {
 		t.Fatal("publish to an unreachable broker should fail")
 	}
 }

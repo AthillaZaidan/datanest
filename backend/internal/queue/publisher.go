@@ -25,7 +25,7 @@ func NewPublisher(url, queue string) *Publisher {
 	return &Publisher{url: url, queue: queue}
 }
 
-func (p *Publisher) Publish(ctx context.Context, executionID uint, traceparent string) error {
+func (p *Publisher) Publish(ctx context.Context, job Job) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -33,10 +33,11 @@ func (p *Publisher) Publish(ctx context.Context, executionID uint, traceparent s
 		return err
 	}
 	err := p.ch.PublishWithContext(ctx, "", p.queue, false, false, amqp.Publishing{
-		DeliveryMode: amqp.Persistent,
-		ContentType:  "text/plain",
-		Body:         []byte(strconv.FormatUint(uint64(executionID), 10)),
-		Headers:      amqp.Table{traceparentHeader: traceparent},
+		DeliveryMode:  amqp.Persistent,
+		ContentType:   "text/plain",
+		Body:          []byte(strconv.FormatUint(uint64(job.ExecutionID), 10)),
+		CorrelationId: job.CorrelationID,
+		Headers:       amqp.Table{traceparentHeader: job.Traceparent},
 	})
 	if err != nil {
 		p.disconnect()
