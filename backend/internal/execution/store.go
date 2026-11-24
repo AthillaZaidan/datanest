@@ -187,5 +187,13 @@ func (s *Store) MarkDeadRunning(ctx context.Context) ([]uint, error) {
 		RETURNING e.id`,
 		models.ExecUncertain, models.ExecRunning,
 	).Scan(&ids).Error
+	if err != nil || len(ids) == 0 {
+		return ids, err
+	}
+	err = s.db.WithContext(ctx).Exec(`
+		UPDATE execution_attempts SET status = ?, error_code = 'WORKER_LOST', finished_at = now()
+		WHERE execution_id IN ? AND status = ?`,
+		models.AttemptUncertain, ids, models.AttemptRunning,
+	).Error
 	return ids, err
 }
