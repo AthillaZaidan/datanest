@@ -61,6 +61,7 @@ var contract = []struct{ method, path string }{
 	{"POST", "/api/migrations/7/execute"},
 	{"POST", "/api/migrations/7/duplicate"},
 	{"POST", "/api/migrations/7/explain"},
+	{"GET", "/api/executions/7"},
 }
 
 func do(r http.Handler, method, path string) *httptest.ResponseRecorder {
