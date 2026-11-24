@@ -91,9 +91,9 @@ func describe(err error) (code, message string) {
 	}
 	var unknown *unknownError
 	if errors.As(err, &unknown) {
-		return "COMMIT_UNKNOWN", unknown.Error()
+		return "COMMIT_UNKNOWN", "Hasil commit tidak pasti; platform memeriksa ledger sebelum menentukan hasilnya."
 	}
-	return "TARGET_UNAVAILABLE", "Koneksi ke database target bermasalah: " + err.Error()
+	return "TARGET_UNAVAILABLE", "Koneksi ke database target bermasalah."
 }
 
 func withJitter(d time.Duration) time.Duration {
