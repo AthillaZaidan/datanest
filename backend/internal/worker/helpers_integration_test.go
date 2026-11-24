@@ -130,7 +130,9 @@ func (e *env) newBatchExec(sqlText string, size int, x models.MigrationExecution
 	e.t.Helper()
 	x.Mode = models.ExecModeBatch
 	x.BatchTable = "items"
-	x.BatchColumn = "id"
+	if x.BatchColumn == "" {
+		x.BatchColumn = "id"
+	}
 	x.BatchSize = &size
 	x.SQLExecuted = sqlText
 	return e.newExec(x)
