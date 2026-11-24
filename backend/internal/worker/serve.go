@@ -41,7 +41,7 @@ func (w *Worker) Handle(ctx context.Context, m queue.Message) {
 }
 
 func (w *Worker) Serve(ctx context.Context, amqpURL string, sweepEvery time.Duration) error {
-	consumer := queue.NewConsumer(amqpURL, queue.JobsQueue, w.cfg.Concurrency)
+	consumer := queue.NewConsumer(amqpURL, w.cfg.Queue, w.cfg.Concurrency)
 	go w.RunSweeper(ctx, sweepEvery)
 	err := consumer.Run(ctx, w.Handle)
 	w.Wait()
