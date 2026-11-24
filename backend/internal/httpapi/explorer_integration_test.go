@@ -41,6 +41,7 @@ const explorerFixture = `
 	CREATE SCHEMA sales;
 	CREATE TABLE sales.regions (code text PRIMARY KEY);
 	CREATE TABLE _platform_migrations (version int PRIMARY KEY);
+	CREATE TABLE _platform_executions (execution_id bigint, batch_no int, PRIMARY KEY (execution_id, batch_no));
 	INSERT INTO products (name, price, data, meta)
 		SELECT 'p' || g, g, '\xdead'::bytea, jsonb_build_object('n', g) FROM generate_series(1, 30) g;
 	INSERT INTO logs VALUES ('a', '{"x":1}'), ('b', NULL);`
@@ -178,7 +179,7 @@ func TestExplorerTableDetail(t *testing.T) {
 		t.Errorf("foreign key = %+v", fk)
 	}
 
-	for _, name := range []string{"_platform_migrations", "missing", "products;%20DROP%20TABLE%20orders"} {
+	for _, name := range []string{"_platform_migrations", "_platform_executions", "missing", "products;%20DROP%20TABLE%20orders"} {
 		if code, _ := errorCode(t, h, base+name); code != 404 {
 			t.Errorf("%s = %d, want 404", name, code)
 		}
