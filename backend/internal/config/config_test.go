@@ -110,3 +110,23 @@ func TestKeyNotEchoedInError(t *testing.T) {
 		t.Fatalf("error must not contain the key value: %v", err)
 	}
 }
+
+func TestAMQPURLIsOptional(t *testing.T) {
+	cfg, err := FromLookup(env(minimal()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.AMQPURL != "" {
+		t.Errorf("AMQPURL = %q, want empty by default", cfg.AMQPURL)
+	}
+
+	m := minimal()
+	m["AMQP_URL"] = "amqp://user:pass@broker:5672/"
+	cfg, err = FromLookup(env(m))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.AMQPURL != "amqp://user:pass@broker:5672/" {
+		t.Errorf("AMQPURL = %q", cfg.AMQPURL)
+	}
+}
