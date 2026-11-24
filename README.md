@@ -142,6 +142,12 @@ docker compose up -d --wait
 cd backend && go run ./cmd/server
 ```
 
+Eksekusi migration asynchronous butuh proses worker terpisah dan RabbitMQ (ikut `docker compose up`); isi `AMQP_URL` di `.env`:
+
+```bash
+cd backend && go run ./cmd/worker
+```
+
 Setelah mengubah kode frontend, bangun ulang dengan `cd frontend && bun run build`. Session tersimpan di database platform, jadi pengguna tetap masuk setelah backend di-restart (selama belum melewati timeout).
 
 ## Test
@@ -154,7 +160,15 @@ cd backend && go test -race ./...
 cd backend && set -a && . ../.env && set +a && go test -race -tags=integration -p 1 ./...
 ```
 
-Perintah pertama menjalankan unit test. Perintah kedua juga menjalankan integration test ke `test-pg` (container harus menyala); `-p 1` wajib karena semua package memakai database test yang sama.
+Perintah pertama menjalankan unit test. Perintah kedua juga menjalankan integration test ke `test-pg` (container harus menyala); `-p 1` wajib karena semua package memakai database test yang sama. Test yang butuh RabbitMQ (`internal/queue` dan `internal/worker`) dilewati bila `TEST_AMQP_URL` kosong, jadi pastikan variabel itu ada di `.env` (lihat `.env.example`); tanpanya perintah tetap berakhir `ok`.
+
+Data uji besar (satu `UPDATE` tanpa batch harus lebih dari 1 detik, lalu dataset yang sama diuji per batch) dijalankan terpisah:
+
+```bash
+cd backend && set -a && . ../.env && set +a && go test -tags=integration,bigdata -p 1 -run BigData -v ./internal/worker/
+```
+
+Jumlah row diatur `BIGDATA_ROWS` (default 2.000.000). Test gagal dengan saran menaikkannya bila `UPDATE` tanpa batch selesai dalam 1 detik atau kurang. Hasil di mesin pengembang (Postgres 17 di Docker): 2.000.000 row, satu `UPDATE` 8,6 detik; per batch 100.000 row (20 batch) 6,9 detik, dengan hasil akhir yang sama.
 
 ## Reset dan troubleshooting
 
@@ -516,3 +530,80 @@ Setiap error memakai bentuk yang sama:
 - **Frontend harus dibangun** (`bun run build`) sebelum backend dapat menyajikannya; tanpa build, hanya JSON API yang tersedia.
 - Di luar lingkup milestone ini: DBMS selain PostgreSQL, schema diff dan migration generation, re-authentication, rate
   limiting login, dan pagination di halaman admin.
+
+### 15. Eksekusi asynchronous (Milestone 2)
+
+Setiap eksekusi migration (termasuk rollback dan forward) adalah satu baris `migration_executions` yang dijalankan oleh proses
+worker terpisah (`cmd/worker`) lewat antrean RabbitMQ. Alurnya:
+
+1. Baris execution berstatus `queued` di database platform. **Database adalah sumber kebenaran**; RabbitMQ hanya bel pintu.
+2. Sweeper (jalan di worker, tiap `WORKER_SWEEP_INTERVAL`) menerbitkan pesan berisi `execution_id`, `traceparent`, dan
+   `correlation_id` untuk execution `queued` yang belum diterbitkan. Pesan yang hilang atau ganda tidak merusak data, karena
+   baris di database yang menentukan.
+3. Worker mengambil pesan, **mengambil lock database**, lalu **mengklaim** execution (`queued` atau `uncertain` menjadi `running`)
+   dengan satu `UPDATE ... WHERE status = ...`. Klaim yang menghasilkan 0 baris berarti pesan duplikat: di-ack dan dibuang.
+4. Pesan **di-ack setelah klaim berhasil**, bukan setelah job selesai: migration besar bisa lebih lama dari batas waktu ack
+   RabbitMQ, dan pemulihan worker yang mati ditangani database lewat lease. Akibatnya prefetch tidak lagi membatasi jumlah job
+   yang berjalan, sehingga worker membatasi sendiri lewat `WORKER_CONCURRENCY` slot yang diambil sebelum klaim.
+5. Worker menjalankan SQL di database target dalam satu transaction bersama baris **ledger**, lalu menulis hasil
+   (`success`, `failed`, `partial`, atau `uncertain`) dan melepas lock. Hasil dan progress dibaca SPA lewat polling
+   `GET /api/executions/:id` (10 detik saat `pending_review`, 2 detik saat status lain yang belum final).
+
+**Lock per database dan pemulihannya.** Table `database_locks` punya satu baris per database: pemegang (`owner`), execution,
+`token`, dan `lease_until`. Mengambil lock adalah satu statement atomik `INSERT ... ON CONFLICT DO UPDATE ... WHERE lease_until < now()`
+sehingga hanya satu worker yang menang; waktu memakai jam database. Sewa 30 detik (`WORKER_LEASE`) diperpanjang tiap 10 detik
+(`WORKER_HEARTBEAT`) dengan syarat `owner` dan `token` masih cocok. Lock tetap dipegang di antara commit batch dan baru dilepas
+setelah hasil ditulis; melepas hanya mengakhiri sewa, barisnya dipertahankan agar `token` hanya naik.
+- **Worker mati atau macet:** heartbeat berhenti, sewa habis sendiri. Sweeper menemukan execution `running` tanpa lock yang masih
+  hidup, menandainya `uncertain`, dan menerbitkan pesan pemulihan. Worker lain mengambil lock (token naik) dan memeriksa ledger.
+- **Zombie:** worker yang hanya macet lalu bangun mendapat 0 baris saat memperpanjang sewa, langsung berhenti, dan tidak menulis
+  apa pun. Semua penulisan hasil bersyarat pada status `running` dan pemilik klaim, jadi zombie tidak dapat menimpa hasil.
+  Pagar terakhirnya ledger: bila zombie dan worker pengganti sama-sama commit batch yang sama, primary key ledger membatalkan
+  satu transaction beserta perubahan datanya; yang kalah menganggap hasilnya "tidak pasti" lalu diperiksa lewat ledger.
+- Satu sumber lease: sweeper hanya memeriksa `database_locks`, execution tidak punya `lease_until` sendiri.
+
+**Ledger idempotency.** Table `_platform_executions` di setiap database target (disembunyikan dari explorer) dengan primary key
+`(execution_id, batch_no)`; mode normal memakai `batch_no = 0`. Barisnya ditulis dalam transaction yang sama dengan SQL, sehingga
+ada tepat bila perubahannya ter-commit. Karena itu setiap eksekusi **dimulai dengan membaca ledger**: bila bukti commit sudah ada,
+hasilnya ditulis tanpa menjalankan SQL lagi.
+
+**Commit tidak pasti.** Kegagalan saat `COMMIT`, pembatalan di tengah commit, atau bentrok primary key ledger berarti
+tidak diketahui apakah data ter-commit. Execution menjadi `uncertain` dan **tidak** di-retry atau di-fail begitu saja:
+pemulihan membaca ledger (ada baris berarti selesai, tidak ada berarti dijalankan sebagai percobaan berikutnya). Bila target tidak
+dapat dihubungi, status tetap `uncertain` dan dicoba lagi tiap 30 detik; tidak ada tombol "paksa selesai".
+Selama ada execution `running`, `partial`, atau `uncertain` di sebuah database, migration berikutnya di database itu **ditahan**
+(menjadi `failed` dengan alasan `BLOCKED`).
+
+**Retry.** Hanya kegagalan yang pasti terjadi sebelum commit yang diulang (koneksi, `lock_timeout`, deadlock, serialization):
+maksimal `WORKER_MAX_ATTEMPTS` (3) percobaan, jeda 5 lalu 15 detik ditambah jitter, dipegang database lewat `not_before` dan
+sweeper. Error SQL (syntax, constraint, pembagian nol) langsung `failed`. Tiap percobaan adalah satu baris `execution_attempts`
+(append-only) dengan status, SQLSTATE, dan SQL yang dijalankan.
+
+**Mode per-batch.** SQL ditulis user sebagai satu statement dengan `$1` (batas bawah, tidak termasuk) dan `$2` (batas atas,
+termasuk), mis. `UPDATE orders SET status = 'x' WHERE id > $1 AND id <= $2`. Kolom batch harus bertipe `smallint`/`integer`/`bigint`,
+`NOT NULL`, dan unik (primary key atau unique index tunggal); nama tabel dan kolom divalidasi lewat katalog dan di-quote. Saat mulai,
+worker mengambil snapshot nilai terbesar kolom (`scope_max`) sehingga row baru sesudahnya tidak ikut. Tiap batch satu transaction:
+SQL, baris ledger (rentang dan jumlah row), `COMMIT`. Progress di baris execution hanya salinan untuk UI; saat melanjutkan,
+kebenaran dibaca dari ledger.
+- **Gagal di tengah:** `partial` bila minimal satu batch sudah commit, `failed` bila belum.
+- **Retry dari checkpoint:** percobaan berikutnya melanjutkan dari batch berikutnya di ledger, tanpa mengulang batch yang selesai.
+- **Lanjutkan `partial`:** execution baru dengan `continues_execution_id`, mulai dari cursor terakhir di ledger dan memakai
+  `scope_max` yang sama.
+- **Undo batch:** rollback yang menunjuk execution yang dibatalkan (`reverts_execution_id`) menjalankan SQL down per batch
+  dalam urutan terbalik memakai rentang dari ledger. Gagal di tengah menghasilkan `partial` ("partially reverted") yang dapat
+  dilanjutkan; batch yang sudah di-undo dilewati.
+
+**Asumsi dan aturan tambahan** (spek tidak mengatur):
+- Sebuah execution `partial` berhenti menahan database setelah ada execution lanjutan atau rollback yang menyelesaikannya
+  dengan status `success` atau `partial`; execution lanjutan tidak ditahan oleh `partial` yang ia lanjutkan.
+- Revalidasi aturan versi dan posisi aktif (rollback hanya untuk yang teratas, forward linear) dipasang lewat `Worker.Revalidate`;
+  worker sendiri hanya menegakkan aturan blokir di atas.
+
+**Batasan:**
+- Platform tidak memeriksa apakah data masih aman di-undo. SQL down yang benar adalah tanggung jawab penulis migration,
+  dan migration yang tidak dapat dipulihkan harus ditandai irreversible.
+- Kolom batch hanya bilangan bulat; satu statement per batch (tanpa multi-statement).
+- Sweeper berjalan di dalam worker: bila semua worker mati, pekerjaan menunggu sampai ada worker yang hidup lagi.
+- Tidak ada dead-letter queue; execution yang gagal tetap tersimpan sebagai baris `failed` yang dapat dilihat dan di-forward ulang.
+- Tombol "Jalankan" M1 (`POST /api/migrations/:id/execute`) masih sinkron sampai alur pengajuan dan approval menggantikannya;
+  eksekusi M1 tidak lewat antrean.
