@@ -15,6 +15,8 @@ func All() []any {
 		&Grant{},
 		&Migration{},
 		&DatabaseLock{},
+		&MigrationExecution{},
+		&ExecutionAttempt{},
 	}
 }
 
