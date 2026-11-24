@@ -38,6 +38,7 @@ type Publisher interface {
 
 type Config struct {
 	WorkerID         string
+	Queue            string
 	Concurrency      int
 	LeaseTTL         time.Duration
 	HeartbeatEvery   time.Duration
@@ -54,6 +55,9 @@ type Config struct {
 func (c Config) withDefaults() Config {
 	if c.WorkerID == "" {
 		c.WorkerID = "worker"
+	}
+	if c.Queue == "" {
+		c.Queue = queue.JobsQueue
 	}
 	if c.Concurrency < 1 {
 		c.Concurrency = 4
