@@ -137,6 +137,7 @@ func (w *Worker) finalize(ctx context.Context, cl *Claimed, batches int, rows in
 	}
 
 	code, message := describe(runErr)
+	slog.Warn("execution.error", "execution_id", e.ID, "database_id", e.DatabaseID, "attempt", e.Attempts, "code", code, "error", runErr)
 	switch classify(runErr) {
 	case kindUnknown:
 		attempt(models.AttemptUncertain, code, message)
