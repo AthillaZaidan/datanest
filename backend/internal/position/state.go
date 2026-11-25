@@ -135,12 +135,12 @@ func (s *State) rollback(e Event) {
 	}
 	if onTop {
 		s.Active = s.Active[:n-1]
+		s.shelveRetry()
 	}
 	if settles {
 		s.Partial = nil
 	}
 	s.Redo[e.MigrationID] = true
-	s.shelveRetry()
 }
 
 func (s *State) shelveRetry() {
