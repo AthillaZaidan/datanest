@@ -11,7 +11,13 @@ type View struct {
 	ID           uint                   `json:"id"`
 	DatabaseID   uint                   `json:"databaseId"`
 	Version      *int                   `json:"version"`
-	SQL          string                 `json:"sql"`
+	// SQL is SQLUp under its Milestone 1 name, kept for older clients.
+	SQL                string     `json:"sql"`
+	SQLUp              string     `json:"sqlUp"`
+	SQLDown            string     `json:"sqlDown"`
+	Irreversible       bool       `json:"irreversible"`
+	IrreversibleReason string     `json:"irreversibleReason,omitempty"`
+	FrozenAt           *time.Time `json:"frozenAt"`
 	Status       models.MigrationStatus `json:"status"`
 	ErrorMessage string                 `json:"errorMessage,omitempty"`
 	ErrorCode    string                 `json:"errorCode,omitempty"`
@@ -37,7 +43,12 @@ func toView(m *models.Migration, currentVersion int) View {
 		ID:           m.ID,
 		DatabaseID:   m.DatabaseID,
 		Version:      m.Version,
-		SQL:          m.SQL,
+		SQL:                m.SQL,
+		SQLUp:              m.SQL,
+		SQLDown:            m.SQLDown,
+		Irreversible:       m.Irreversible,
+		IrreversibleReason: m.IrreversibleReason,
+		FrozenAt:           m.FrozenAt,
 		Status:       m.Status,
 		ErrorMessage: m.ErrorMessage,
 		ErrorCode:    m.ErrorCode,

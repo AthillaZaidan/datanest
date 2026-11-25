@@ -54,7 +54,7 @@ func setupExplain(t *testing.T) explainEnv {
 
 func (e explainEnv) draft(t *testing.T, sql string) uint {
 	t.Helper()
-	m, err := e.svc.Create(context.Background(), e.editor, e.dbID, sql)
+	m, err := e.svc.Create(context.Background(), e.editor, e.dbID, migration.Recipe{SQLUp: sql})
 	if err != nil {
 		t.Fatal(err)
 	}

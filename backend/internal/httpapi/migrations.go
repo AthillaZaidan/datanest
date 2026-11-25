@@ -15,8 +15,21 @@ type migrationHandlers struct {
 }
 
 type migrationBody struct {
-	SQL      *string `json:"sql"`
-	Revision *int    `json:"revision"`
+	// SQL is the Milestone 1 name of SQLUp; either is accepted.
+	SQL                *string `json:"sql"`
+	SQLUp              *string `json:"sqlUp"`
+	SQLDown            string  `json:"sqlDown"`
+	Irreversible       bool    `json:"irreversible"`
+	IrreversibleReason string  `json:"irreversibleReason"`
+	Revision           *int    `json:"revision"`
+}
+
+func (b *migrationBody) recipe() migration.Recipe {
+	up := b.SQLUp
+	if up == nil {
+		up = b.SQL
+	}
+	return migration.Recipe{SQLUp: *up, SQLDown: b.SQLDown, Irreversible: b.Irreversible, IrreversibleReason: b.IrreversibleReason}
 }
 
 var errInvalidBody = apperr.ErrValidation.WithMessage("Body JSON tidak valid.")
@@ -28,8 +41,8 @@ func bindMigration(c *gin.Context, needRevision bool) (*migrationBody, bool) {
 		return nil, false
 	}
 	details := map[string]string{}
-	if b.SQL == nil {
-		details["sql"] = "wajib diisi"
+	if b.SQL == nil && b.SQLUp == nil {
+		details["sqlUp"] = "wajib diisi"
 	}
 	if needRevision && b.Revision == nil {
 		details["revision"] = "wajib diisi"
@@ -71,7 +84,7 @@ func (h migrationHandlers) create(c *gin.Context) {
 	if !ok {
 		return
 	}
-	v, err := h.svc.Create(c.Request.Context(), userID, dbID, *body.SQL)
+	v, err := h.svc.Create(c.Request.Context(), userID, dbID, body.recipe())
 	if err != nil {
 		RespondError(c, err)
 		return
@@ -96,7 +109,7 @@ func (h migrationHandlers) update(c *gin.Context) {
 	if !ok {
 		return
 	}
-	v, err := h.svc.Update(c.Request.Context(), userID, id, *body.SQL, *body.Revision)
+	v, err := h.svc.Update(c.Request.Context(), userID, id, body.recipe(), *body.Revision)
 	if err != nil {
 		RespondError(c, err)
 		return
