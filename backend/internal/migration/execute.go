@@ -167,9 +167,9 @@ func failure(err error) (message, code string) {
 	return "Koneksi ke database target bermasalah; perubahan di-rollback.", ""
 }
 
-// limits are the per-transaction lock and statement timeouts for SQL from users.
+// limits are the per-transaction parser setting and the lock and statement timeouts for SQL from users.
 func (s *Service) limits() []string {
-	var out []string
+	out := []string{"SET LOCAL standard_conforming_strings = on"}
 	if s.opts.LockTimeout > 0 {
 		out = append(out, fmt.Sprintf("SET LOCAL lock_timeout = %d", s.opts.LockTimeout.Milliseconds()))
 	}
