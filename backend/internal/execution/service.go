@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
+	"github.com/AthillaZaidan/datanest/backend/internal/approval"
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
 )
@@ -42,30 +43,28 @@ type AttemptView struct {
 	ErrorMessage string     `json:"errorMessage,omitempty"`
 }
 
-type ApproverView struct {
-	UserID   uint   `json:"userId"`
-	Username string `json:"username"`
-	Approved bool   `json:"approved"`
-}
+type ApproverView = approval.ApproverState
 
 type View struct {
-	ID           uint           `json:"id"`
-	MigrationID  uint           `json:"migrationId"`
-	DatabaseID   uint           `json:"databaseId"`
-	Kind         string         `json:"kind"`
-	Status       string         `json:"status"`
-	Mode         string         `json:"mode"`
-	BatchSize    *int           `json:"batchSize"`
-	Progress     *ProgressView  `json:"progress"`
-	Attempts     []AttemptView  `json:"attempts"`
-	ErrorCode    string         `json:"errorCode,omitempty"`
-	ErrorMessage string         `json:"errorMessage,omitempty"`
-	SQLExecuted  *string        `json:"sqlExecuted"`
-	Approvers    []ApproverView `json:"approvers"`
-	RequestedBy  string         `json:"requestedBy"`
-	CreatedAt    time.Time      `json:"createdAt"`
-	StartedAt    *time.Time     `json:"startedAt"`
-	FinishedAt   *time.Time     `json:"finishedAt"`
+	ID            uint                 `json:"id"`
+	MigrationID   uint                 `json:"migrationId"`
+	DatabaseID    uint                 `json:"databaseId"`
+	Kind          string               `json:"kind"`
+	Status        string               `json:"status"`
+	Mode          string               `json:"mode"`
+	BatchSize     *int                 `json:"batchSize"`
+	Progress      *ProgressView        `json:"progress"`
+	Attempts      []AttemptView        `json:"attempts"`
+	ErrorCode     string               `json:"errorCode,omitempty"`
+	ErrorMessage  string               `json:"errorMessage,omitempty"`
+	SQLExecuted   *string              `json:"sqlExecuted"`
+	Approvers     []ApproverView       `json:"approvers"`
+	BlockedGroups []approval.GroupRef  `json:"blockedGroups"`
+	Permissions   approval.Permissions `json:"permissions"`
+	RequestedBy   string               `json:"requestedBy"`
+	CreatedAt     time.Time            `json:"createdAt"`
+	StartedAt     *time.Time           `json:"startedAt"`
+	FinishedAt    *time.Time           `json:"finishedAt"`
 }
 
 var errExecutionNotFound = apperr.ErrNotFound.WithMessage("Eksekusi tidak ditemukan.")
@@ -89,7 +88,13 @@ func (s *Service) Get(ctx context.Context, userID, id uint) (*View, error) {
 	if err != nil {
 		return nil, err
 	}
-	return toView(e, attempts), nil
+	info, err := approval.Describe(ctx, s.db, e, userID)
+	if err != nil {
+		return nil, err
+	}
+	v := toView(e, attempts)
+	v.Approvers, v.BlockedGroups, v.Permissions = info.Approvers, info.BlockedGroups, info.Permissions
+	return v, nil
 }
 
 func toView(e *models.MigrationExecution, attempts []models.ExecutionAttempt) *View {
@@ -97,7 +102,7 @@ func toView(e *models.MigrationExecution, attempts []models.ExecutionAttempt) *V
 		ID: e.ID, MigrationID: e.MigrationID, DatabaseID: e.DatabaseID,
 		Kind: string(e.Kind), Status: string(e.Status), Mode: string(e.Mode), BatchSize: e.BatchSize,
 		ErrorCode: e.ErrorCode, ErrorMessage: e.ErrorMessage,
-		Approvers:   []ApproverView{},
+		Approvers: []ApproverView{}, BlockedGroups: []approval.GroupRef{},
 		RequestedBy: e.RequestedByUsername,
 		CreatedAt:   e.CreatedAt, StartedAt: e.StartedAt, FinishedAt: e.FinishedAt,
 		Attempts: make([]AttemptView, 0, len(attempts)),
