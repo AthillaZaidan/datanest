@@ -267,7 +267,12 @@ Request → middleware (Origin + Content-Type → RequireAuth + CSRF → Require
 | `admin` | User, role, group, keanggotaan, dan grant. |
 | `dbconn` | Koneksi database target: enkripsi kredensial, pool, uji koneksi. |
 | `explorer` | Schema, table, column, constraint, index, dan data (read-only). |
-| `migration` | Draft, eksekusi transaksional, `sqlguard`, lock per database, rekonsiliasi. |
+| `migration` | Resep migration (up, down, irreversible, mode), pengajuan, revalidasi, riwayat, ledger di target, analisis plan, dan `sqlguard`. |
+| `position` | Menurunkan posisi aktif, redo, dan status partial sebuah database dari riwayat eksekusinya, serta memutuskan run, forward, atau rollback mana yang sah. |
+| `approval` | Daftar penyetuju live, setuju, tolak, tarik, cabut, dan perpindahan ke antrean. |
+| `execution` | Baris eksekusi: transisi status bersyarat pemilik klaim, penahan, attempt, dan tampilan API-nya. |
+| `queue`, `worker`, `dblock` | Pesan RabbitMQ, satu-satunya pelaksana SQL migration, dan lock per database berbasis sewa. |
+| `obs` | Nama event dan atribut log, masking, correlation ID, dan tracing. |
 | `httpapi` | Router JSON API, handler, dan pemetaan error ke JSON. |
 | `httpapi/spa.go` | Menyajikan build SPA; GET non-`/api` yang bukan file jatuh ke `index.html` agar route sisi klien tetap hidup saat reload. |
 | `apperr` | Tipe error aplikasi dan daftar kode error. |
@@ -275,7 +280,7 @@ Request → middleware (Origin + Content-Type → RequireAuth + CSRF → Require
 **Pemisahan keputusan dan penegakan akses (spek).** Aturan "siapa boleh melakukan apa" hanya ada di package `authz`.
 Middleware memeriksa identitas (sudah login atau belum) dan status Platform Admin. Pemeriksaan akses per database dilakukan
 di service **setelah** resource dimuat, sehingga `databaseId` yang diperiksa adalah milik resource sebenarnya, bukan nilai
-dari URL. Ini mencegah IDOR, misalnya mengeksekusi migration milik database lain lewat `/migrations/:id`. Halaman
+dari URL. Ini mencegah IDOR, misalnya mengajukan migration milik database lain lewat `/migrations/:id/executions`. Halaman
 menyembunyikan tombol hanya untuk kenyamanan; seluruh penegakan akses ada di backend **(spek)**. Prinsipnya *deny by
 default*: aksi yang tidak dikenal dan kegagalan lookup akses selalu ditolak.
 
@@ -356,23 +361,22 @@ setelah grace period identifier lama ditolak **(spek)**.
 ### 5. Perlindungan CSRF
 
 - **Synchronizer token (spek: perlindungan CSRF).** Token 32 byte acak, berbeda dari session identifier, dibuat saat login
-  dan disimpan di session. Setiap form di halaman membawanya sebagai field tersembunyi `csrf_token`; klien JSON API
-  menerimanya dari `POST /api/auth/login` dan `GET /api/auth/me` lalu mengirimnya di header `X-CSRF-Token`. Setiap
+  dan disimpan di session. SPA menerimanya dari `POST /api/auth/login` dan `GET /api/auth/me`
+  lalu mengirimnya di header `X-CSRF-Token`. Setiap
   `POST`, `PUT`, `PATCH`, dan `DELETE` diperiksa dengan perbandingan constant-time; token tidak berubah saat rotasi agar
   request dalam grace period tetap valid.
 - **Pemeriksaan `Origin`:** request pengubah state dari origin selain `ALLOWED_ORIGIN` ditolak `403 ORIGIN_NOT_ALLOWED`.
   Bersama kewajiban JSON, ini juga menangkal login CSRF, saat token belum tersedia.
 - **Jenis body dibatasi:** JSON API hanya menerima `application/json` (`415` bila tidak), sehingga form lintas situs tidak dapat
-  memanggilnya. Halaman menerima form `application/x-www-form-urlencoded`, yang selalu wajib membawa token CSRF.
-- Semua `GET` bebas efek samping; logout, hapus, dan eksekusi migration selalu `POST`, dan setiap form mengikuti pola
-  post/redirect/get.
+  memanggilnya.
+- Semua `GET` bebas efek samping; logout, hapus, pengajuan, dan persetujuan tidak pernah lewat `GET`.
 
 ### 6. Otorisasi dan akses efektif
 
 - Akses database diberikan **ke group, bukan ke user (spek)**. User dapat menjadi anggota beberapa group, dan satu group
   dapat memiliki level berbeda di setiap database **(spek)**.
 - Level akses: `VIEW` (melihat schema, data, serta riwayat dan detail migration) dan `EDIT` (seluruh `VIEW` ditambah
-  membuat, mengubah, menghapus, menduplikasi, dan menjalankan migration) **(spek)**.
+  membuat, mengubah, menghapus, menduplikasi, dan mengajukan migration) **(spek)**.
 - **Rumus akses efektif (spek: ditentukan dan didokumentasikan tim):** akses efektif user terhadap sebuah database adalah
   **level tertinggi dari semua group user yang memiliki grant ke database tersebut**; tanpa grant berarti tanpa akses.
   Rumus ini dipilih karena bergabung ke group baru tidak pernah mengurangi akses, dan hasilnya mudah ditelusuri dari data
@@ -410,7 +414,7 @@ setelah grace period identifier lama ditolak **(spek)**.
 - Menampilkan schema, table, column (tipe, nullability, default), constraint (primary key, foreign key beserta rujukannya,
   unique, check), index, dan data **(spek)**, langsung dari `pg_catalog`.
 - Schema sistem (`pg_catalog`, `information_schema`, `pg_toast`, schema temporer) dan table internal
-  `_platform_migrations` disembunyikan.
+  `_platform_executions` serta `_platform_migrations` (ledger Milestone 1) disembunyikan.
 - Setiap query berjalan di dalam transaction `READ ONLY`, sebagai pertahanan kedua setelah otorisasi: PostgreSQL menolak
   perubahan apa pun di dalamnya.
 - Nama schema dan table dari URL harus ada di katalog, lalu di-quote dengan sanitasi identifier pgx. Identifier tidak dapat
@@ -418,66 +422,65 @@ setelah grace period identifier lama ditolak **(spek)**.
 - Data dipaginasi: 10, 25, 50, atau 100 baris per halaman (default 25). Backend membatasi `pageSize` ke 1-100 dan `page`
   minimal 1. Urutan stabil berdasarkan primary key; table tanpa primary key diurutkan berdasarkan `ctid`.
 
-### 9. Migration
+### 9. Migration, rollback, forward, dan riwayat
 
-**Lifecycle.** `draft → running → success | failed`.
+**Resep dan eksekusi dipisah.** `migrations` menyimpan resep, `migration_executions` menyimpan setiap permintaan menjalankannya
+(run, forward, rollback) sebagai satu baris. Status, persetujuan, dan hasil milik eksekusi, sehingga rollback dan forward juga
+melewati review yang baru dan riwayatnya tidak pernah ditimpa.
 
-| Status | Dapat diubah | Memiliki versi | Aksi |
-| --- | --- | --- | --- |
-| `draft` | Ya, oleh user EDIT di database tersebut | Tidak | Ubah, hapus, jalankan |
-| `running` | Tidak | Ya | Menunggu |
-| `success` | Tidak | Ya | Lihat, duplikat jadi draft |
-| `failed` | Tidak | Ya | Lihat, duplikat jadi draft |
+**Resep.**
+- SQL up wajib. SQL down wajib, atau migration ditandai **irreversible beserta alasannya (spek)**. Keduanya diperiksa saat
+  diajukan; draft boleh disimpan sebelum lengkap (SQL down kosong).
+- Mode **normal** menjalankan SQL apa adanya dalam satu transaction. Mode **per-batch** menyebut tabel dan kolom batch, dan SQL up
+  serta down masing-masing satu statement yang memakai `$1` dan `$2` (aturannya di bagian 15).
+- Semua user EDIT boleh mengubah draft dengan optimistic locking (`revision`; revisi usang ditolak `409 REVISION_CONFLICT`). Selama
+  ada eksekusi yang belum selesai SQL-nya terkunci, dan sejak eksekusi pertama benar-benar mulai (`frozen_at`) resepnya
+  **immutable (spek)**. Koreksi dibuat sebagai migration baru, misalnya dengan **Duplikat jadi draft baru**.
+- `base_version` dicatat saat draft dibuat. Bila database sudah berubah sejak itu, editor menampilkan peringatan.
 
-- Draft memungkinkan SQL disusun dan ditinjau sebelum dijalankan **(spek: editor dan peninjauan)**. Semua user EDIT pada
-  database yang sama boleh mengubah draft, bukan hanya pembuatnya. Perubahan yang bersamaan ditangani dengan optimistic
-  locking: setiap simpan mengirim `revision` terakhir, dan revisi yang usang ditolak `409 REVISION_CONFLICT`.
-- Migration yang sudah dijalankan, baik sukses maupun gagal, bersifat immutable. Koreksi selalu melalui migration baru,
-  misalnya dengan **Duplikat jadi draft baru**.
-- **Versi dan riwayat linear (spek).** Versi diberikan saat eksekusi dimulai (`MAX(version) + 1` per database), termasuk
-  untuk eksekusi yang akhirnya gagal, sehingga urutan versi sama dengan urutan kejadian di database. Versi schema saat ini
-  adalah versi `success` terbesar. Riwayat tidak bercabang dan tidak pernah ditulis ulang.
-- Setiap migration mencatat versi, SQL, pembuat, pengubah terakhir, pelaksana, waktu mulai dan selesai, status, serta pesan
-  error dan SQLSTATE bila gagal **(spek)**. Referensi user memakai `ON DELETE SET NULL` ditambah salinan username, sehingga
-  riwayat tetap utuh saat user dihapus; pelaksana yang sudah dihapus ditampilkan sebagai `nama (deleted)`.
-- `base_version` dicatat saat draft dibuat. Bila database sudah berubah sejak itu, editor menampilkan peringatan agar SQL
-  ditinjau ulang (peringatan, bukan penolakan).
+**Versi.** Diberikan saat percobaan pertama lolos revalidasi di worker, `MAX(version) + 1` per database, termasuk bila akhirnya
+gagal. Tidak pernah dipakai ulang, jadi boleh ada lubang. Percobaan yang gagal sebelum itu (misalnya target tidak terjangkau)
+belum mendapat versi dan boleh diajukan `run` lagi.
 
-**Eksekusi.**
+**Posisi aktif diturunkan, tidak disimpan.** Package `position` membaca eksekusi sebuah database menurut **urutan jalan**
+(`run_seq`, nomor yang diberikan saat diklaim worker), bukan urutan pengajuan: pengajuan A lalu B yang dijalankan B lebih dulu
+menghasilkan posisi B, A.
+- Run atau forward sukses menaruh migration di puncak; rollback sukses melepasnya. Kegagalan tidak mengubah posisi **(spek)**.
+- **Rollback** hanya untuk puncak yang reversible **(spek)**, memakai SQL down resep yang beku, dan mencatat eksekusi yang
+  dibatalkannya (`reverts_execution_id`). Unique index parsial menjamin satu eksekusi dibatalkan paling banyak sekali.
+- **Forward** menjalankan SQL up lagi untuk migration yang pernah di-rollback, mulai dari versi terkecil, dan tidak menjalankan
+  migration berikutnya **(spek)**. Percobaan **gagal** juga boleh di-forward lagi atau dilanjutkan dengan migration lain **(spek)**:
+  run yang gagal tetap bisa di-forward sampai ada migration baru yang berhasil diterapkan, dan run baru yang gagal tidak membuang
+  migration yang tadi di-rollback.
+- Run baru yang **sukses** membuang riwayat redo. Migration yang terbuang hanya bisa diduplikat.
+- **Partial** (mode per-batch): migration itu hanya bisa dilanjutkan atau dibatalkan, rollback dan forward migration lain ditolak,
+  dan run migration lain boleh diajukan tetapi ditahan worker sampai partial itu selesai.
+- Aturan ini diperiksa saat pengajuan (kunci baris `database_connections`, satu pengajuan per database pada satu waktu) dan
+  diulang worker setelah memegang lock (`Revalidate`). Bila sudah tidak berlaku, eksekusi `failed` dengan
+  `REVALIDATION_FAILED` beserta alasannya, tanpa menyentuh target.
 
-1. Akses `EDIT` diperiksa terhadap database milik migration.
-2. `sqlguard` menolak perintah kontrol transaction (`400 TRANSACTION_CONTROL_NOT_ALLOWED`).
-3. Lock per database diambil secara non-blocking; bila database sedang menjalankan migration lain, request ditolak
-   `409 MIGRATION_RUNNING`. Lock dipegang sampai status final tercatat, sehingga urutan versi sama dengan urutan commit.
-4. Status diubah `draft → running` dengan update bersyarat; bila migration sudah tidak berstatus draft (klik ganda atau dua
-   user bersamaan), request ditolak `409 MIGRATION_NOT_DRAFT`.
-5. Di database target, dalam **satu transaction (spek)**: `SET LOCAL lock_timeout` dan `statement_timeout`, SQL pengguna
-   dalam satu `Exec` tanpa parameter (protokol simple query menerima banyak statement, termasuk body function), lalu satu
-   baris di `_platform_migrations`. Seluruhnya di-commit bila berhasil dan di-rollback bila gagal **(spek)**.
-6. Status akhir `success` atau `failed` dicatat beserta pesan error PostgreSQL.
+**Riwayat (spek).** `GET /api/databases/:databaseId/executions` menampilkan setiap eksekusi yang sudah mulai, menurut urutan jalan:
+ID eksekusi, migration ID, versi, revisi, jenis, status, SQL yang benar-benar dijalankan, pengaju, waktu, dan error. Setiap
+percobaan (termasuk retry dan pemulihan) adalah satu baris `execution_attempts` beserta SQL dan hasilnya, terlihat di halaman
+eksekusi. Permintaan yang masih menunggu tampil di Antrean review dan sebagai **Eksekusi terakhir** di halaman migration.
+`hideRollback=true` menyembunyikan rollback sukses beserta eksekusi yang ditunjuknya menurut ID, tanpa menghapus data; kegagalan
+tetap terlihat:
 
-Keputusan terkait:
+| Riwayat lengkap | Hide rollback |
+| --- | --- |
+| A [E1], B [E2], B rollback E2 [E3], B forward [E4], C [E5] | A [E1], B [E4], C [E5] |
 
-- SQL tidak dipecah per `;`, karena `;` juga muncul di string dan body function.
-- `sqlguard` memakai tokenizer kecil yang melewati komentar, string literal, quoted identifier, dan dollar-quoted string,
-  lalu memeriksa kata pertama setiap statement terhadap `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`,
-  `SAVEPOINT`, `RELEASE`, dan `PREPARE TRANSACTION`. `COMMIT` di tengah SQL pengguna akan meng-commit transaction platform
-  lebih awal dan merusak jaminan rollback, sehingga harus dicegah sebelum SQL dikirim. Pemeriksaan dilakukan saat eksekusi;
-  draft boleh disimpan apa adanya.
-- Eksekusi memakai context yang terlepas dari request HTTP dengan batas total `MIGRATION_EXEC_TIMEOUT`: menutup browser
-  tidak membatalkan migration yang sedang berjalan, dan hasilnya tetap tercatat.
-- Migration yang gagal bukan error HTTP: endpoint menjawab `200` dengan status `failed`. Error HTTP hanya dipakai bila
-  eksekusi tidak dimulai.
-- Default timeout: `lock_timeout` 5 detik, `statement_timeout` 60 detik, total 2 menit.
-- Migration di database berbeda dapat berjalan paralel. Constraint `UNIQUE(database_id, version)` di database platform
-  menjadi jaring pengaman terakhir.
+**`sqlguard`.** SQL pengguna tidak boleh berisi kontrol transaction (`BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`,
+`SAVEPOINT`, `RELEASE`, `PREPARE TRANSACTION`), karena `COMMIT` di tengah akan memisahkan perubahan dari baris ledgernya. Diperiksa
+saat pengajuan (up dan down) dan saat analisis plan, `400 TRANSACTION_CONTROL_NOT_ALLOWED`. Pemeriksanya satu lexer maju yang
+mengikuti aturan PostgreSQL: komentar bersarang, `--` sampai `\n` atau `\r`, string standar, `E'...'` beserta kelanjutannya di
+baris berikut, quoted identifier, dollar quote, angka, dan parameter. Ia diuji terhadap lexer PostgreSQL sendiri dengan ratusan ribu
+masukan acak. `standard_conforming_strings` dipaksa `on` di setiap transaction migration supaya aturan string itu selalu berlaku.
 
-**Konsistensi antar database.** Database target dan database platform tidak dapat di-commit dalam satu transaction. Baris
-`_platform_migrations` ditulis di transaction yang sama dengan SQL pengguna, sehingga baris itu ada jika dan hanya jika
-perubahan ter-commit. Saat startup, setiap migration yang masih `running` (misalnya karena server mati di tengah eksekusi)
-direkonsiliasi: bila versinya ada di `_platform_migrations` statusnya menjadi `success`, bila tidak menjadi `failed`. Bila
-database target tidak dapat dihubungi, migration tetap `running`, kegagalannya dicatat di log, server tetap berjalan, dan
-rekonsiliasi diulang pada startup berikutnya.
+**Data Milestone 1.** Saat startup, setiap migration M1 yang pernah dijalankan menjadi resep beku yang irreversible ("dibuat di
+Milestone 1, sebelum ada SQL down") dengan satu eksekusi `run` sesuai hasilnya, sehingga posisi aktifnya sama. Baris M1 yang masih
+`running` dianggap gagal ("Eksekusi terputus sebelum Milestone 2."). Jalur eksekusi langsung Milestone 1 (`POST /execute`, lock di
+memori, rekonsiliasi saat startup) sudah dihapus.
 
 ### 10. Bonus: analisis execution plan
 
@@ -497,6 +500,7 @@ Halaman migration menyediakan **Analisis execution plan** (`POST /api/migrations
 - Statement yang gagal menampilkan pesan error PostgreSQL beserta SQLSTATE, dan statement sesudahnya dilewati. `sqlguard`
   menolak perintah kontrol transaction sebelum analisis, dan batas `lock_timeout`, `statement_timeout`, serta
   `MIGRATION_EXEC_TIMEOUT` yang sama dengan eksekusi tetap berlaku.
+- Migration mode per-batch tidak bisa dianalisis, karena SQL-nya memakai parameter `$1` dan `$2`.
 - Batasan: efek di luar transaction tidak ikut di-rollback, misalnya nilai sequence yang terpakai oleh `INSERT` saat ANALYZE.
 
 ### 11. Penghapusan data
@@ -519,13 +523,14 @@ Semua endpoint berada di bawah `/api` dan memakai JSON `camelCase`; waktu dalam 
 | Auth | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me` |
 | Admin | `/admin/users`, `/admin/users/:userId`, `/admin/users/:userId/roles/:role`, `/admin/groups`, `/admin/groups/:groupId`, `/admin/groups/:groupId/members/:userId`, `/admin/groups/:groupId/grants/:databaseId`, `/admin/databases`, `/admin/databases/:databaseId`, `/admin/databases/test`, `/admin/databases/:databaseId/test` |
 | Explorer | `GET /databases`, `GET /databases/:databaseId`, `.../schemas`, `.../schemas/:schema/tables`, `.../tables/:table`, `.../tables/:table/rows?page=&pageSize=` |
-| Review | `POST /migrations/:migrationId/executions` (ajukan), `GET /executions/:executionId`, `POST /executions/:executionId/approve`, `/reject`, `/cancel`, `/withdraw`, `GET /approvals/pending`, `PUT/DELETE /admin/groups/:groupId/leader` |
-| Migration | `GET/POST /databases/:databaseId/migrations?status=`, `GET/PATCH/DELETE /migrations/:migrationId`, `POST /migrations/:migrationId/execute`, `POST /migrations/:migrationId/duplicate`, `POST /migrations/:migrationId/explain?analyze=` |
+| Pengajuan dan review | `POST /migrations/:migrationId/executions` (`kind`: `run`, `forward`, atau `rollback`; `batchSize` wajib untuk run dan forward per-batch; membalas `201` dengan ID job), `GET /executions/:executionId`, `POST /executions/:executionId/approve`, `/reject`, `/cancel`, `/withdraw`, `GET /approvals/pending`, `PUT/DELETE /admin/groups/:groupId/leader` |
+| Migration | `GET/POST /databases/:databaseId/migrations?status=`, `GET/PATCH/DELETE /migrations/:migrationId`, `POST /migrations/:migrationId/duplicate`, `POST /migrations/:migrationId/explain?analyze=` |
+| Riwayat | `GET /databases/:databaseId/executions?hideRollback=` |
 
 Setiap error memakai bentuk yang sama:
 
 ```json
-{ "error": { "code": "MIGRATION_RUNNING", "message": "Sedang ada migration yang berjalan di database ini.", "details": {} } }
+{ "error": { "code": "VALIDATION_ERROR", "message": "Input tidak valid.", "details": { "batchSize": "wajib diisi, 1 sampai 1000000" } } }
 ```
 
 | HTTP | Kode |
@@ -534,34 +539,38 @@ Setiap error memakai bentuk yang sama:
 | 401 | `UNAUTHENTICATED`, `INVALID_CREDENTIALS` |
 | 403 | `FORBIDDEN`, `NOT_AN_APPROVER`, `CSRF_INVALID`, `ORIGIN_NOT_ALLOWED` |
 | 404 | `NOT_FOUND` |
-| 409 | `USERNAME_TAKEN`, `CONFLICT`, `LAST_ADMIN`, `MIGRATION_RUNNING`, `MIGRATION_NOT_DRAFT`, `REVISION_CONFLICT`, `EXECUTION_STATE_CONFLICT`, `GROUP_WITHOUT_LEADER` |
+| 409 | `USERNAME_TAKEN`, `CONFLICT`, `LAST_ADMIN`, `MIGRATION_NOT_DRAFT`, `REVISION_CONFLICT`, `EXECUTION_STATE_CONFLICT`, `ROLLBACK_NOT_ALLOWED`, `FORWARD_NOT_ALLOWED`, `GROUP_WITHOUT_LEADER` |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` |
-| 500 | `INTERNAL_ERROR` (tanpa detail internal; detailnya hanya di log) |
+| 500 | `INTERNAL_ERROR` (tanpa detail internal; panic dicatat sebagai `http.panic` di log) |
 | 502 / 504 | `TARGET_DB_UNAVAILABLE` / `TARGET_DB_TIMEOUT` |
 
 ### 13. Strategi pengujian
 
-- **Unit test** di samping kode yang diuji, untuk logika padat aturan: `authz`, `sqlguard`, enkripsi kredensial, pagination, pemetaan error, dan konfigurasi.
-- **Integration test** (build tag `integration`) terhadap PostgreSQL sungguhan di `test-pg`, sebagian besar melalui router
-  Gin dengan `httptest` tanpa menyalakan server, sesuai contoh di spesifikasi. Cakupannya meliputi login, logout, session store
-  (jam yang dapat diinjeksi; rotasi, grace, rotasi paralel, dan session yang tetap berlaku setelah store dibuat ulang), timeout
-  dan rotasi session, CSRF dan `Origin`, seed admin, CRUD admin dan penolakan non-admin, akses efektif multi-group, IDOR,
-  uji koneksi (termasuk kredensial salah dan peringatan superuser), explorer read-only, eksekusi sukses, multi-statement dan
-  function, rollback, statement non-transaksional, concurrency, lock timeout, rekonsiliasi, dan analisis execution plan
-  (EXPLAIN dan ANALYZE di-rollback, ANALYZE hanya untuk EDIT).
+- **Unit test** di samping kode yang diuji, untuk logika padat aturan: `authz`, `sqlguard`, `position` (aturan versi, rollback, forward,
+  partial), validasi resep, masking log, enkripsi kredensial, pagination, pemetaan error, dan konfigurasi.
+- **Integration test** (build tag `integration`) terhadap PostgreSQL dan RabbitMQ sungguhan, sebagian besar melalui router Gin dengan
+  `httptest` atau memanggil worker langsung, sesuai contoh di spesifikasi. Selain cakupan Milestone 1 (session, CSRF, akses, IDOR,
+  explorer, koneksi, analisis plan):
+  - **Alur migration:** run, rollback, forward, kegagalan, immutable, urutan jalan, hide rollback (E1 sampai E5), data Milestone 1.
+  - **Approval:** semua leader, bukan leader, leader VIEW, daftar penyetuju berubah, dua persetujuan bersamaan, group tanpa leader.
+  - **Worker:** pesan duplikat, lock dan pemulihannya, retry, commit tidak pasti, dua database paralel, worker mati dan zombie (dengan
+    hook penyuntik kegagalan), batas pemulihan, penahanan migration berikutnya.
+  - **Per-batch:** checkpoint, lanjut, undo, partially reverted, worker mati di tengah batch, validasi kolom dan ukuran.
+  - **Observability:** atribut log, masking, versi dan revisi, satu trace dari request sampai worker lewat broker.
+- **Data besar** (tag `bigdata`) seperti dijelaskan di [Test](#test).
 - Setiap fitur diuji untuk alur berhasil, gagal, dan penolakan akses **(spek)**. Semua test dijalankan dengan race detector.
 
 ### 14. Batasan yang disengaja
 
 - **Satu query database per request terautentikasi:** session dibaca dari database platform. Bila database platform tidak
   dapat dihubungi, request terautentikasi ditolak `401`.
-- **Backend harus berjalan sebagai satu instance:** lock migration per database masih berada di memori proses. Session sendiri
-  sudah tidak terikat pada satu instance.
+- **Server dan worker boleh lebih dari satu:** session, antrean, dan lock migration ada di database platform dan RabbitMQ, bukan di
+  memori proses.
 - **Statement non-transaksional** seperti `CREATE INDEX CONCURRENTLY`, `VACUUM`, `CREATE DATABASE`, dan `ALTER SYSTEM`
   tidak didukung, karena setiap migration dijalankan dalam transaction agar dapat di-rollback. PostgreSQL menolaknya dengan
   SQLSTATE `25001`, dan platform menampilkan penjelasan yang mudah dipahami. Body function standar SQL (`BEGIN ATOMIC`) juga
   ditolak `sqlguard`; gunakan body dollar-quoted.
-- **Table `_platform_migrations`** dibuat di schema `public` setiap database target dan dikelola platform; table ini tidak
+- **Table `_platform_executions`** dibuat di schema `public` setiap database target dan dikelola platform; table ini tidak
   boleh diubah manual.
 - **Table tanpa primary key** diurutkan berdasarkan `ctid` saat dipaginasi. Urutannya stabil selama data tidak berubah, tetapi
   dapat bergeser setelah `UPDATE` atau `VACUUM FULL`.
