@@ -49,8 +49,8 @@ function ErrorNotice({ error, action }: { error: Error; action?: ReactNode }) {
       {error.message}
       {details.length > 0 && (
         <ul className="mt-1 list-disc pl-5">
-          {details.map((d) => (
-            <li key={d}>{d}</li>
+          {details.map((d, i) => (
+            <li key={i}>{d}</li>
           ))}
         </ul>
       )}
