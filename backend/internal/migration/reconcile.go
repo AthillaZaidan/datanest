@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
 )
 
@@ -48,8 +50,13 @@ func (s *Service) reconcileOne(ctx context.Context, m *models.Migration) error {
 		update["status"] = models.MigrationFailed
 		update["error_message"] = msgInterrupted
 	}
-	return s.platform.WithContext(ctx).Model(&models.Migration{}).
-		Where("id = ? AND status = ?", m.ID, models.MigrationRunning).Updates(update).Error
+	return s.platform.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&models.Migration{}).Where("id = ? AND status = ?", m.ID, models.MigrationRunning).Updates(update)
+		if res.Error != nil || res.RowsAffected == 0 {
+			return res.Error
+		}
+		return models.RecordLegacyRun(tx, m.ID)
+	})
 }
 
 func ledgerHas(ctx context.Context, db *sql.DB, version int) (bool, error) {
