@@ -46,27 +46,31 @@ type AttemptView struct {
 type ApproverView = approval.ApproverState
 
 type View struct {
-	ID            uint                 `json:"id"`
-	MigrationID   uint                 `json:"migrationId"`
-	DatabaseID    uint                 `json:"databaseId"`
-	Version       *int                 `json:"version"`
-	Revision      int                  `json:"revision"`
-	Kind          string               `json:"kind"`
-	Status        string               `json:"status"`
-	Mode          string               `json:"mode"`
-	BatchSize     *int                 `json:"batchSize"`
-	Progress      *ProgressView        `json:"progress"`
-	Attempts      []AttemptView        `json:"attempts"`
-	ErrorCode     string               `json:"errorCode,omitempty"`
-	ErrorMessage  string               `json:"errorMessage,omitempty"`
-	SQLExecuted   *string              `json:"sqlExecuted"`
-	Approvers     []ApproverView       `json:"approvers"`
-	BlockedGroups []approval.GroupRef  `json:"blockedGroups"`
-	Permissions   approval.Permissions `json:"permissions"`
-	RequestedBy   string               `json:"requestedBy"`
-	CreatedAt     time.Time            `json:"createdAt"`
-	StartedAt     *time.Time           `json:"startedAt"`
-	FinishedAt    *time.Time           `json:"finishedAt"`
+	ID                   uint                 `json:"id"`
+	MigrationID          uint                 `json:"migrationId"`
+	DatabaseID           uint                 `json:"databaseId"`
+	Version              *int                 `json:"version"`
+	Revision             int                  `json:"revision"`
+	Kind                 string               `json:"kind"`
+	Status               string               `json:"status"`
+	Mode                 string               `json:"mode"`
+	BatchSize            *int                 `json:"batchSize"`
+	BatchTable           string               `json:"batchTable,omitempty"`
+	BatchColumn          string               `json:"batchColumn,omitempty"`
+	RevertsExecutionID   *uint                `json:"revertsExecutionId"`
+	ContinuesExecutionID *uint                `json:"continuesExecutionId"`
+	Progress             *ProgressView        `json:"progress"`
+	Attempts             []AttemptView        `json:"attempts"`
+	ErrorCode            string               `json:"errorCode,omitempty"`
+	ErrorMessage         string               `json:"errorMessage,omitempty"`
+	SQLExecuted          *string              `json:"sqlExecuted"`
+	Approvers            []ApproverView       `json:"approvers"`
+	BlockedGroups        []approval.GroupRef  `json:"blockedGroups"`
+	Permissions          approval.Permissions `json:"permissions"`
+	RequestedBy          string               `json:"requestedBy"`
+	CreatedAt            time.Time            `json:"createdAt"`
+	StartedAt            *time.Time           `json:"startedAt"`
+	FinishedAt           *time.Time           `json:"finishedAt"`
 }
 
 var errExecutionNotFound = apperr.ErrNotFound.WithMessage("Eksekusi tidak ditemukan.")
@@ -103,6 +107,7 @@ func toView(e *models.MigrationExecution, attempts []models.ExecutionAttempt) *V
 	v := &View{
 		ID: e.ID, MigrationID: e.MigrationID, DatabaseID: e.DatabaseID, Version: e.Version, Revision: e.Revision,
 		Kind: string(e.Kind), Status: string(e.Status), Mode: string(e.Mode), BatchSize: e.BatchSize,
+		BatchTable: e.BatchTable, BatchColumn: e.BatchColumn, RevertsExecutionID: e.RevertsExecutionID, ContinuesExecutionID: e.ContinuesExecutionID,
 		ErrorCode: e.ErrorCode, ErrorMessage: e.ErrorMessage,
 		Approvers: []ApproverView{}, BlockedGroups: []approval.GroupRef{},
 		RequestedBy: e.RequestedByUsername,
