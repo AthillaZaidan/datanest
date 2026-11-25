@@ -50,6 +50,13 @@ func redoIDs(s State) []uint {
 	return out
 }
 
+func idOf(id *uint) uint {
+	if id == nil {
+		return 0
+	}
+	return *id
+}
+
 func partialID(s State) uint {
 	if s.Partial == nil {
 		return 0
@@ -86,8 +93,14 @@ func TestDerive(t *testing.T) {
 			[]Event{ev(1, a, run, failed), ev(2, b, run, ok)}, []uint{b}, []uint{}, 0, 0},
 		{"a new run that fails keeps the rolled back migration and is itself forwardable",
 			[]Event{ev(1, a, run, ok), ev(2, b, run, ok), undo(3, b, 2, ok), ev(4, c, run, failed)}, []uint{a}, []uint{b}, c, 0},
-		{"a new run that fails takes the place of an earlier failed one",
-			[]Event{ev(1, a, run, failed), ev(2, b, run, failed)}, []uint{}, []uint{}, b, 0},
+		{"a new run that fails keeps an earlier failed one in the redo history",
+			[]Event{ev(1, a, run, failed), ev(2, b, run, failed)}, []uint{}, []uint{a}, b, 0},
+		{"every failed run stays until something is applied",
+			[]Event{ev(1, a, run, failed), ev(2, b, run, failed), ev(3, c, run, failed)}, []uint{}, []uint{a, b}, c, 0},
+		{"forward of the latest failed run discards the earlier ones",
+			[]Event{ev(1, a, run, failed), ev(2, b, run, failed), ev(3, b, forward, ok)}, []uint{b}, []uint{}, 0, 0},
+		{"forward of an earlier failed run keeps the latest one",
+			[]Event{ev(1, a, run, failed), ev(2, b, run, failed), ev(3, a, forward, ok)}, []uint{a}, []uint{}, b, 0},
 		{"rolling back two migrations keeps both in the redo history",
 			[]Event{ev(1, a, run, ok), ev(2, b, run, ok), ev(3, c, run, ok), undo(4, c, 3, ok), undo(5, b, 2, ok)},
 			[]uint{a}, []uint{b, c}, 0, 0},
@@ -147,9 +160,23 @@ func TestDerive(t *testing.T) {
 		{"a partial forward of the failed run that is continued clears the redo history",
 			[]Event{ev(1, a, run, ok), undo(2, a, 1, ok), ev(3, b, run, failed), ev(4, b, forward, partial), resume(5, b, 4, ok)},
 			[]uint{b}, []uint{}, 0, 0},
-		{"a partial forward of the failed run that is undone puts it in the redo history",
+		{"a partial forward of the failed run that is undone stays forwardable",
 			[]Event{ev(1, a, run, ok), undo(2, a, 1, ok), ev(3, b, run, failed), ev(4, b, forward, partial), undo(5, b, 4, ok)},
+			[]uint{}, []uint{a, b}, b, 0},
+		{"undoing a partial forward of a rolled back migration keeps the failed run forwardable",
+			[]Event{ev(1, a, run, ok), undo(2, a, 1, ok), ev(3, b, run, failed), ev(4, a, forward, partial), undo(5, a, 4, ok)},
+			[]uint{}, []uint{a}, b, 0},
+		{"continuing a partial rollback below a failed run puts both in the redo history",
+			[]Event{ev(1, a, run, ok), ev(2, b, run, failed), undo(3, a, 1, partial), resumeUndo(4, a, 1, 3, ok)},
 			[]uint{}, []uint{a, b}, 0, 0},
+		{"a successful run replaces a partial one",
+			[]Event{ev(1, a, run, partial), ev(2, b, run, ok)}, []uint{b}, []uint{}, 0, 0},
+		{"a successful run replaces a partial forward of a failed run",
+			[]Event{ev(1, a, run, failed), ev(2, a, forward, partial), ev(3, b, run, ok)}, []uint{b}, []uint{}, 0, 0},
+		{"a failed run leaves a partial one in place",
+			[]Event{ev(1, a, run, partial), ev(2, b, run, failed)}, []uint{}, []uint{}, b, 1},
+		{"a partial run that is continued after another run failed is active",
+			[]Event{ev(1, a, run, partial), ev(2, b, run, failed), resume(3, a, 1, ok)}, []uint{a}, []uint{}, b, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -171,14 +198,20 @@ func TestDerive(t *testing.T) {
 }
 
 func TestDeriveDescribesThePartialExecution(t *testing.T) {
-	s := Derive([]Event{ev(1, 7, run, ok), undo(2, 7, 1, partial)})
-	if p := s.Partial; p == nil || p.ExecutionID != 2 || p.MigrationID != 7 || p.Kind != rollback || p.Reverts == nil || *p.Reverts != 1 {
-		t.Errorf("partial = %+v, want the rollback of execution 1", s.Partial)
+	check := func(events []Event, want Partial, reverts uint) {
+		t.Helper()
+		p := Derive(events).Partial
+		if p == nil {
+			t.Fatalf("no partial execution, want %+v", want)
+		}
+		got := *p
+		got.Reverts = nil
+		if got != want || idOf(p.Reverts) != reverts {
+			t.Errorf("partial = %+v reverting %d, want %+v reverting %d", got, idOf(p.Reverts), want, reverts)
+		}
 	}
-	s = Derive([]Event{ev(1, 7, run, partial)})
-	if p := s.Partial; p == nil || p.ExecutionID != 1 || p.MigrationID != 7 || p.Kind != run || p.Reverts != nil {
-		t.Errorf("partial = %+v, want the run", s.Partial)
-	}
+	check([]Event{ev(1, 7, run, ok), undo(2, 7, 1, partial)}, Partial{ExecutionID: 2, MigrationID: 7, Kind: rollback}, 1)
+	check([]Event{ev(1, 7, run, partial)}, Partial{ExecutionID: 1, MigrationID: 7, Kind: run}, 0)
 }
 
 func TestDeriveTracksStartedAndTop(t *testing.T) {
