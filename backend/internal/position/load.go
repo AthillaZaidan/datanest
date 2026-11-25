@@ -21,7 +21,7 @@ func Load(ctx context.Context, db *gorm.DB, databaseID, exclude uint) (State, ma
 	}
 	err := db.WithContext(ctx).Model(&models.MigrationExecution{}).
 		Select("id, migration_id, kind, status, reverts_execution_id").
-		Where("database_id = ? AND id <> ?", databaseID, exclude).Order("id").Scan(&rows).Error
+		Where("database_id = ? AND id <> ?", databaseID, exclude).Order("run_seq NULLS LAST, id").Scan(&rows).Error
 	if err != nil {
 		return State{}, nil, err
 	}
