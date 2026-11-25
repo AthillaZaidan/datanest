@@ -92,8 +92,8 @@ Dibuat oleh `go run ./cmd/seed`:
 | Username | Password | Akses |
 | --- | --- | --- |
 | `demo-admin` | `demoadmin123` | Platform Admin. Tidak masuk group mana pun, jadi tidak bisa membuka database: akses database selalu lewat grant group. |
-| `developer` | `developer123` | Group Tim Developer: EDIT `toko`, VIEW `kampus`. Bisa membuat dan menjalankan migration di `toko`. |
-| `reviewer` | `reviewer123` | Group Tim Reviewer: VIEW `toko` dan `kampus`. Hanya membaca schema, data, dan riwayat. |
+| `developer` | `developer123` | Group Tim Developer: EDIT `toko`, VIEW `kampus`. Bisa membuat dan mengajukan migration di `toko`. Leader Tim Developer. |
+| `reviewer` | `reviewer123` | Group Tim Reviewer: VIEW `toko` dan `kampus`. Membaca schema, data, dan riwayat, dan menyetujui pengajuan sebagai leader Tim Reviewer. |
 
 Daftar akun di halaman login hanya tampil di `bun run dev` atau pada build dengan `VITE_SHOW_DEMO_ACCOUNTS=true` (daftarnya ada di `frontend/src/dev/demoAccounts.ts` dan harus sama dengan `backend/internal/demo/demo.go`). Jangan jalankan seed ke database platform sungguhan, dan jangan membangun frontend dengan flag itu di luar demo lokal.
 
@@ -101,7 +101,10 @@ Alur demo singkat:
 
 1. Masuk sebagai `reviewer`: buka `toko`, lihat struktur dan data table. Tombol **Migration baru** tidak muncul.
 2. Masuk sebagai `developer`: buka `toko`, **Migration baru**, tulis SQL (misalnya `ALTER TABLE products ADD COLUMN sku text;`), **Simpan draft**, lalu **Jalankan**. Versi schema naik dan kolom baru terlihat di tab Struktur. SQL yang salah tercatat sebagai Gagal dan di-rollback.
-3. Masuk sebagai `demo-admin`: buka **Groups** untuk mengatur anggota dan grant, **Koneksi database** untuk menambah atau menguji koneksi. Membuka `toko` ditolak sampai `demo-admin` dimasukkan ke group yang punya grant.
+3. Alur review: `developer` mengajukan migration (status **Menunggu review**), lalu `developer` dan `reviewer` sama-sama membuka
+   **Antrean review** dan menekan **Setujui** (keduanya leader, jadi keduanya harus setuju). Setelah yang terakhir menyetujui, status
+   berubah **Disetujui**, **Dalam antrean**, lalu worker (`go run ./cmd/worker`) menjalankannya. `reviewer` juga bisa **Tolak**.
+4. Masuk sebagai `demo-admin`: buka **Groups** untuk mengatur anggota dan grant, **Koneksi database** untuk menambah atau menguji koneksi. Membuka `toko` ditolak sampai `demo-admin` dimasukkan ke group yang punya grant.
 
 ## Isi file .env
 
@@ -126,6 +129,8 @@ Backend membaca `backend/.env` lalu `.env` di root repo; variabel environment ya
 | `MIGRATION_LOCK_TIMEOUT` | `5s` | `lock_timeout` saat migration berjalan. |
 | `MIGRATION_STATEMENT_TIMEOUT` | `60s` | `statement_timeout` per statement migration. |
 | `MIGRATION_EXEC_TIMEOUT` | `2m` | Batas total satu eksekusi migration. |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, atau `error`. Log berbentuk JSON di stdout. |
+| `TRACE_EXPORTER` | `console` | `console` menulis span ke stderr; `none` mematikan tracing. |
 | `TEST_PLATFORM_DSN`, `TEST_TARGET_DSN` | ke `test-pg` | Hanya untuk integration test. |
 
 Port host database bisa diubah dengan `PLATFORM_PG_PORT`, `TARGET_PG_PORT`, dan `TEST_PG_PORT` saat `docker compose up`; sesuaikan DSN-nya. Koneksi demo dari seed selalu menunjuk `localhost:15433`, jadi bila `TARGET_PG_PORT` diubah, perbarui port koneksi di halaman Koneksi database.
@@ -481,6 +486,7 @@ Semua endpoint berada di bawah `/api` dan memakai JSON `camelCase`; waktu dalam 
 | Auth | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me` |
 | Admin | `/admin/users`, `/admin/users/:userId`, `/admin/users/:userId/roles/:role`, `/admin/groups`, `/admin/groups/:groupId`, `/admin/groups/:groupId/members/:userId`, `/admin/groups/:groupId/grants/:databaseId`, `/admin/databases`, `/admin/databases/:databaseId`, `/admin/databases/test`, `/admin/databases/:databaseId/test` |
 | Explorer | `GET /databases`, `GET /databases/:databaseId`, `.../schemas`, `.../schemas/:schema/tables`, `.../tables/:table`, `.../tables/:table/rows?page=&pageSize=` |
+| Review | `POST /migrations/:migrationId/executions` (ajukan), `GET /executions/:executionId`, `POST /executions/:executionId/approve`, `/reject`, `/cancel`, `/withdraw`, `GET /approvals/pending`, `PUT/DELETE /admin/groups/:groupId/leader` |
 | Migration | `GET/POST /databases/:databaseId/migrations?status=`, `GET/PATCH/DELETE /migrations/:migrationId`, `POST /migrations/:migrationId/execute`, `POST /migrations/:migrationId/duplicate`, `POST /migrations/:migrationId/explain?analyze=` |
 
 Setiap error memakai bentuk yang sama:
@@ -493,9 +499,9 @@ Setiap error memakai bentuk yang sama:
 | --- | --- |
 | 400 | `VALIDATION_ERROR` (dengan `details` per field), `TRANSACTION_CONTROL_NOT_ALLOWED` |
 | 401 | `UNAUTHENTICATED`, `INVALID_CREDENTIALS` |
-| 403 | `FORBIDDEN`, `CSRF_INVALID`, `ORIGIN_NOT_ALLOWED` |
+| 403 | `FORBIDDEN`, `NOT_AN_APPROVER`, `CSRF_INVALID`, `ORIGIN_NOT_ALLOWED` |
 | 404 | `NOT_FOUND` |
-| 409 | `USERNAME_TAKEN`, `CONFLICT`, `LAST_ADMIN`, `MIGRATION_RUNNING`, `MIGRATION_NOT_DRAFT`, `REVISION_CONFLICT` |
+| 409 | `USERNAME_TAKEN`, `CONFLICT`, `LAST_ADMIN`, `MIGRATION_RUNNING`, `MIGRATION_NOT_DRAFT`, `REVISION_CONFLICT`, `EXECUTION_STATE_CONFLICT`, `GROUP_WITHOUT_LEADER` |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` |
 | 500 | `INTERNAL_ERROR` (tanpa detail internal; detailnya hanya di log) |
 | 502 / 504 | `TARGET_DB_UNAVAILABLE` / `TARGET_DB_TIMEOUT` |
