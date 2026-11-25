@@ -96,6 +96,9 @@ func TestDeriveTracksStartedAndTop(t *testing.T) {
 	if !s.Started[1] || !s.Started[2] || s.Started[3] {
 		t.Errorf("started = %v", s.Started)
 	}
+	if s.Open[1] || s.Open[2] || !s.Open[3] {
+		t.Errorf("open = %v, want only the queued migration", s.Open)
+	}
 	if top, ok := s.Top(); !ok || top.MigrationID != 1 || top.ExecutionID != 1 {
 		t.Errorf("top = %+v %v", top, ok)
 	}
