@@ -59,7 +59,8 @@ func TestCodesAreUnique(t *testing.T) {
 	all := []*Error{
 		ErrValidation, ErrTransactionControlNotAllowed, ErrUnauthenticated, ErrInvalidCredentials,
 		ErrForbidden, ErrCSRFInvalid, ErrOriginNotAllowed, ErrNotFound, ErrUsernameTaken, ErrConflict,
-		ErrMigrationRunning, ErrMigrationNotDraft, ErrRevisionConflict, ErrUnsupportedMediaType,
+		ErrMigrationRunning, ErrMigrationNotDraft, ErrExecutionStateConflict, ErrRollbackNotAllowed,
+		ErrForwardNotAllowed, ErrRevisionConflict, ErrUnsupportedMediaType,
 		ErrInternal, ErrNotImplemented, ErrTargetDBUnavailable, ErrTargetDBTimeout,
 	}
 	seen := map[string]bool{}
