@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -17,13 +16,6 @@ import (
 )
 
 type span struct{ from, to string }
-
-func tableIdent(name string) pgx.Identifier {
-	if i := strings.Index(name, "."); i > 0 {
-		return pgx.Identifier{name[:i], name[i+1:]}
-	}
-	return pgx.Identifier{"public", name}
-}
 
 func totals(entries []migration.LedgerEntry) (int, int64) {
 	var rows int64
@@ -41,35 +33,13 @@ func parseBound(s string) (int64, error) {
 	return n, nil
 }
 
-func checkBatchColumn(ctx context.Context, db *sql.DB, table pgx.Identifier, column string) error {
-	var dataType string
-	var notNull, unique bool
-	err := db.QueryRowContext(ctx, `
-		SELECT format_type(a.atttypid, a.atttypmod), a.attnotnull,
-			EXISTS (
-				SELECT 1 FROM pg_index i
-				WHERE i.indrelid = a.attrelid AND i.indisunique AND i.indnatts = 1
-					AND i.indkey[0] = a.attnum AND i.indpred IS NULL
-			)
-		FROM pg_attribute a
-		WHERE a.attrelid = to_regclass($1) AND a.attname = $2 AND a.attnum > 0 AND NOT a.attisdropped`,
-		table.Sanitize(), column,
-	).Scan(&dataType, &notNull, &unique)
-	if errors.Is(err, sql.ErrNoRows) {
-		return permanent("BATCH_COLUMN_NOT_FOUND", "Kolom %s tidak ditemukan di tabel %s.", column, strings.Join(table, "."))
+func checkBatchColumn(ctx context.Context, db *sql.DB, table, column string) error {
+	err := migration.CheckBatchColumn(ctx, db, table, column)
+	var problem *migration.BatchColumnError
+	if errors.As(err, &problem) {
+		return permanent(problem.Code, "%s", problem.Message)
 	}
-	if err != nil {
-		return err
-	}
-	switch dataType {
-	case "smallint", "integer", "bigint":
-	default:
-		return permanent("BATCH_COLUMN_TYPE", "Kolom batch harus bertipe bilangan bulat (smallint, integer, bigint), bukan %s.", dataType)
-	}
-	if !notNull || !unique {
-		return permanent("BATCH_COLUMN_NOT_UNIQUE", "Kolom batch harus NOT NULL dan unik (primary key atau unique index tunggal).")
-	}
-	return nil
+	return err
 }
 
 func (w *Worker) chain(ctx context.Context, id uint) ([]uint, error) {
@@ -205,14 +175,13 @@ func (w *Worker) runBatches(ctx context.Context, db *sql.DB, cl *Claimed, own []
 		return batches, rows, permanent("BATCH_SIZE_INVALID", "Ukuran batch harus lebih dari 0.")
 	}
 	size := *e.BatchSize
-	ident := tableIdent(e.BatchTable)
 	if e.BatchTable == "" || e.BatchColumn == "" {
 		return batches, rows, permanent("BATCH_CONFIG_MISSING", "Mode batch butuh tabel dan kolom batch.")
 	}
-	if err := checkBatchColumn(ctx, db, ident, e.BatchColumn); err != nil {
+	if err := checkBatchColumn(ctx, db, e.BatchTable, e.BatchColumn); err != nil {
 		return batches, rows, err
 	}
-	table, column := ident.Sanitize(), pgx.Identifier{e.BatchColumn}.Sanitize()
+	table, column := migration.BatchTable(e.BatchTable).Sanitize(), pgx.Identifier{e.BatchColumn}.Sanitize()
 
 	scope, hasScope, err := w.batchScope(ctx, db, cl, table, column)
 	if err != nil {
