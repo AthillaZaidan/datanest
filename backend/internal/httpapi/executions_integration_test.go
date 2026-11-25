@@ -100,3 +100,25 @@ func TestANormalModeExecutionHasNoProgressBlock(t *testing.T) {
 		t.Errorf("progress = %v, attempts = %v; want no progress and an empty attempts list", got.Progress, got.Attempts)
 	}
 }
+
+func TestExecutionViewShowsTheMigrationVersionAndRevision(t *testing.T) {
+	platform := testutil.PlatformDB(t)
+	viewer := testutil.CreateUser(t, platform, "viewer")
+	conn := testutil.CreateDatabaseConnection(t, platform, "toko")
+	version := 4
+	versioned := testutil.CreateExecution(t, platform, models.MigrationExecution{DatabaseID: conn.ID, Version: &version, Revision: 2})
+	waiting := testutil.CreateExecution(t, platform, models.MigrationExecution{DatabaseID: conn.ID, Status: models.ExecPendingReview, Revision: 1})
+	h := NewRouter(Deps{RequireAuth: testutil.AsUser(viewer.ID), Executions: execution.NewService(platform, fakeAuthz{viewer.ID: authz.View})})
+
+	var got struct {
+		Version  *int `json:"version"`
+		Revision int  `json:"revision"`
+	}
+	if code := getJSON(t, h, "/api/executions/"+itoa(versioned.ID), &got); code != 200 || got.Version == nil || *got.Version != 4 || got.Revision != 2 {
+		t.Errorf("versioned execution = %d version %v revision %d, want 4 and 2", code, got.Version, got.Revision)
+	}
+	got.Version = nil
+	if code := getJSON(t, h, "/api/executions/"+itoa(waiting.ID), &got); code != 200 || got.Version != nil || got.Revision != 1 {
+		t.Errorf("waiting execution = %d version %v revision %d, want none and 1", code, got.Version, got.Revision)
+	}
+}
