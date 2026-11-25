@@ -36,6 +36,8 @@ var contract = []struct{ method, path string }{
 	{"GET", "/api/admin/groups/1/members"},
 	{"PUT", "/api/admin/groups/1/members/2"},
 	{"DELETE", "/api/admin/groups/1/members/2"},
+	{"PUT", "/api/admin/groups/1/leader"},
+	{"DELETE", "/api/admin/groups/1/leader"},
 	{"GET", "/api/admin/groups/1/grants"},
 	{"PUT", "/api/admin/groups/1/grants/3"},
 	{"DELETE", "/api/admin/groups/1/grants/3"},
