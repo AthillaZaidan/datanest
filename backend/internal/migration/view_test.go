@@ -7,6 +7,7 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/position"
 )
 
 func TestUserLabel(t *testing.T) {
@@ -45,6 +46,32 @@ func TestBaseOutdated(t *testing.T) {
 	}
 }
 
+func TestForwardableOnTheView(t *testing.T) {
+	versions := map[uint]int{1: 1, 2: 2, 3: 3}
+	state := position.State{Redo: map[uint]bool{1: true, 2: true}, Retry: 3}
+	partial := state
+	partial.Partial = &position.Partial{ExecutionID: 9, MigrationID: 1, Kind: models.ExecKindForward}
+	tests := []struct {
+		name  string
+		state position.State
+		id    uint
+		want  bool
+	}{
+		{"lowest redo", state, 1, true},
+		{"higher redo", state, 2, false},
+		{"failed run", state, 3, true},
+		{"draft", state, 4, false},
+		{"lowest redo while partial", partial, 1, false},
+		{"failed run while partial", partial, 3, false},
+	}
+	for _, tt := range tests {
+		v := toView(&models.Migration{ID: tt.id}, snapshot{state: tt.state, versions: versions})
+		if v.Forwardable != tt.want {
+			t.Errorf("%s: Forwardable = %v, want %v", tt.name, v.Forwardable, tt.want)
+		}
+	}
+}
+
 func TestRecipeValidate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -55,6 +82,10 @@ func TestRecipeValidate(t *testing.T) {
 		{"reversible draft may lack down for now", Recipe{SQLUp: "SELECT 1"}, nil},
 		{"irreversible needs a reason", Recipe{SQLUp: "SELECT 1", Irreversible: true}, []string{"irreversibleReason"}},
 		{"irreversible with a reason", Recipe{SQLUp: "SELECT 1", Irreversible: true, IrreversibleReason: "data hilang"}, nil},
+		{"unknown mode", Recipe{SQLUp: "SELECT 1", Mode: "bulk"}, []string{"mode"}},
+		{"batch without table and column", Recipe{SQLUp: "SELECT 1", Mode: models.ExecModeBatch, BatchTable: " ", BatchColumn: "\t"}, []string{"batchTable", "batchColumn"}},
+		{"batch without column", Recipe{SQLUp: "SELECT 1", Mode: models.ExecModeBatch, BatchTable: "orders"}, []string{"batchColumn"}},
+		{"batch", Recipe{SQLUp: "SELECT 1", Mode: models.ExecModeBatch, BatchTable: "orders", BatchColumn: "id"}, nil},
 	}
 	for _, tt := range tests {
 		err := tt.r.validate()
@@ -86,5 +117,16 @@ func TestRecipeValidateNormalisesTheDownSQL(t *testing.T) {
 	r = Recipe{SQLUp: "SELECT 1", SQLDown: "SELECT 2", IrreversibleReason: "stale"}
 	if err := r.validate(); err != nil || r.IrreversibleReason != "" {
 		t.Errorf("reversible keeps reason %q (%v)", r.IrreversibleReason, err)
+	}
+}
+
+func TestRecipeValidateNormalisesTheMode(t *testing.T) {
+	normal := Recipe{SQLUp: "SELECT 1", BatchTable: "orders", BatchColumn: "id"}
+	if err := normal.validate(); err != nil || normal.Mode != models.ExecModeNormal || normal.BatchTable != "" || normal.BatchColumn != "" {
+		t.Errorf("normal = %+v, %v", normal, err)
+	}
+	batch := Recipe{SQLUp: "SELECT 1", Mode: models.ExecModeBatch, BatchTable: " public.orders ", BatchColumn: " id\n"}
+	if err := batch.validate(); err != nil || batch.BatchTable != "public.orders" || batch.BatchColumn != "id" {
+		t.Errorf("batch = %+v, %v", batch, err)
 	}
 }

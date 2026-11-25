@@ -39,10 +39,15 @@ func (s *Store) Claim(ctx context.Context, id uint, from models.ExecutionStatus,
 	err := s.db.WithContext(ctx).Raw(`
 		UPDATE migration_executions SET
 			status = ?, worker_id = ?, attempts = attempts + 1, not_before = NULL,
-			started_at = COALESCE(started_at, now()), updated_at = now()
+			error_code = '', error_message = '',
+			started_at = COALESCE(started_at, now()), updated_at = now(),
+			run_seq = (SELECT COALESCE(MAX(r.run_seq), 0) + 1 FROM migration_executions r
+				WHERE r.database_id = migration_executions.database_id)
 		WHERE id = ? AND status = ? AND (not_before IS NULL OR not_before <= now())
+			AND EXISTS (SELECT 1 FROM database_locks l
+				WHERE l.database_id = migration_executions.database_id AND l.owner = ? AND l.lease_until > now())
 		RETURNING *`,
-		models.ExecRunning, owner, id, from,
+		models.ExecRunning, owner, id, from, owner,
 	).Scan(&rows).Error
 	if err != nil || len(rows) == 0 {
 		return nil, err
@@ -56,6 +61,36 @@ func (s *Store) Postpone(ctx context.Context, id uint, delay time.Duration) erro
 		WHERE id = ? AND status IN (?, ?)`,
 		seconds(delay), id, models.ExecQueued, models.ExecUncertain,
 	).Error
+}
+
+func (s *Store) Hold(ctx context.Context, id uint, delay time.Duration, message string) error {
+	return s.db.WithContext(ctx).Exec(`
+		UPDATE migration_executions SET not_before = now() + make_interval(secs => ?::float8), published_at = NULL,
+			error_code = 'HELD', error_message = ?, updated_at = now()
+		WHERE id = ? AND status = ?`,
+		seconds(delay), message, id, models.ExecQueued,
+	).Error
+}
+
+func (s *Store) Owns(ctx context.Context, id uint, owner string) (bool, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&models.MigrationExecution{}).
+		Where("id = ? AND status = ? AND worker_id = ?", id, models.ExecRunning, owner).Count(&n).Error
+	return n == 1, err
+}
+
+func (s *Store) BeginSQL(ctx context.Context, id uint, owner string) (int, bool, error) {
+	var runs []int
+	err := s.db.WithContext(ctx).Raw(`
+		UPDATE migration_executions SET sql_runs = sql_runs + 1, updated_at = now()
+		WHERE id = ? AND status = ? AND worker_id = ?
+		RETURNING sql_runs`,
+		id, models.ExecRunning, owner,
+	).Scan(&runs).Error
+	if err != nil || len(runs) == 0 {
+		return 0, false, err
+	}
+	return runs[0], true, nil
 }
 
 func (s *Store) MarkPublished(ctx context.Context, id uint) error {
@@ -140,24 +175,31 @@ func (s *Store) Blockers(ctx context.Context, e *models.MigrationExecution) ([]m
 	var out []models.MigrationExecution
 	err := s.db.WithContext(ctx).Raw(`
 		SELECT x.* FROM migration_executions x
-		WHERE x.database_id = ? AND x.id <> ?
+		JOIN migrations m ON m.id = x.migration_id
+		WHERE x.database_id = @database AND x.id <> @id
 			AND (
-				x.status IN (?, ?)
+				x.status IN (@running, @uncertain)
+				OR (x.status = @queued AND x.attempts > 0 AND @attempts = 0)
 				OR (
-					x.status = ?
-					AND x.id <> COALESCE(?::bigint, 0)
-					AND x.id <> COALESCE(?::bigint, 0)
+					x.status = @partial
+					AND x.id <> COALESCE(CAST(@continues AS bigint), 0)
+					AND x.id <> COALESCE(CAST(@reverts AS bigint), 0)
+					AND NOT (m.irreversible AND @kind = @run AND x.finished_at IS NOT NULL AND x.finished_at < CAST(@created AS timestamptz))
 					AND NOT EXISTS (
 						SELECT 1 FROM migration_executions c
-						WHERE (c.continues_execution_id = x.id OR c.reverts_execution_id = x.id)
-							AND c.status IN (?, ?)
+						WHERE c.database_id = x.database_id AND c.status IN (@success, @partial)
+							AND (c.continues_execution_id = x.id OR c.reverts_execution_id = x.id
+								OR (c.kind = @run AND c.run_seq > x.run_seq))
 					)
 				)
 			)
 		ORDER BY x.id`,
-		e.DatabaseID, e.ID, models.ExecRunning, models.ExecUncertain,
-		models.ExecPartial, e.ContinuesExecutionID, e.RevertsExecutionID,
-		models.ExecSuccess, models.ExecPartial,
+		map[string]any{
+			"database": e.DatabaseID, "id": e.ID, "attempts": e.Attempts, "kind": e.Kind, "created": e.CreatedAt,
+			"continues": e.ContinuesExecutionID, "reverts": e.RevertsExecutionID,
+			"running": models.ExecRunning, "uncertain": models.ExecUncertain, "queued": models.ExecQueued,
+			"partial": models.ExecPartial, "success": models.ExecSuccess, "run": models.ExecKindRun,
+		},
 	).Scan(&out).Error
 	return out, err
 }

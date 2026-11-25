@@ -60,7 +60,6 @@ var contract = []struct{ method, path string }{
 	{"GET", "/api/migrations/7"},
 	{"PATCH", "/api/migrations/7"},
 	{"DELETE", "/api/migrations/7"},
-	{"POST", "/api/migrations/7/execute"},
 	{"POST", "/api/migrations/7/duplicate"},
 	{"POST", "/api/migrations/7/explain"},
 	{"GET", "/api/databases/3/executions"},

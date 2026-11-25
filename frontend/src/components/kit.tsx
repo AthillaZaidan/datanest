@@ -141,7 +141,7 @@ export function Meta({ label, children }: { label: string; children: ReactNode }
   return (
     <div className="flex items-baseline justify-between gap-4 border-t border-rule py-2.5 first:border-t-0">
       <dt className="text-sm text-muted">{label}</dt>
-      <dd className="text-right text-sm">{children}</dd>
+      <dd className="min-w-0 text-right text-sm break-words">{children}</dd>
     </div>
   )
 }

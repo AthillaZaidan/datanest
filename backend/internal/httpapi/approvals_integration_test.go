@@ -15,6 +15,7 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/execution"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 	"github.com/AthillaZaidan/datanest/backend/internal/testutil"
 )
 
@@ -209,5 +210,79 @@ func TestPendingQueueOverHTTP(t *testing.T) {
 	r = call(e.as(e.outside), "GET", "/api/approvals/pending", nil)
 	if r.Code != 200 || string(r.Body) == "" || len(r.Body) < 2 || string(r.Body[:2]) != "[]" {
 		t.Errorf("outsider queue = %d %s, want an empty list", r.Code, r.Body)
+	}
+}
+
+func TestReviewEventsCarryTheMigrationVersionAndRevision(t *testing.T) {
+	lines := captureLogs(t)
+	e := newApprovalEnv(t)
+	e.setLeader(t, e.sari)
+	version := 2
+	pending := func() {
+		e.exec = testutil.CreateExecution(t, e.db, models.MigrationExecution{
+			DatabaseID: e.exec.DatabaseID, Status: models.ExecPendingReview, RequestedByID: &e.dev.ID, RequestedByUsername: "dev",
+			Version: &version, Revision: 3,
+		})
+	}
+
+	pending()
+	if r := call(e.as(e.sari), "POST", e.path("approve"), nil); r.Code != 200 {
+		t.Fatalf("approve = %d %s", r.Code, r.Body)
+	}
+	pending()
+	if r := call(e.as(e.sari), "POST", e.path("reject"), nil); r.Code != 200 {
+		t.Fatalf("reject = %d %s", r.Code, r.Body)
+	}
+	pending()
+	if r := call(e.as(e.dev), "POST", e.path("cancel"), nil); r.Code != 200 {
+		t.Fatalf("cancel = %d %s", r.Code, r.Body)
+	}
+	pending()
+	if err := e.db.Create(&models.MigrationApproval{ExecutionID: e.exec.ID, UserID: &e.sari.ID, Username: "sari"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if r := call(e.as(e.sari), "POST", e.path("withdraw"), nil); r.Code != 200 {
+		t.Fatalf("withdraw = %d %s", r.Code, r.Body)
+	}
+
+	for _, event := range []string{obs.EventExecutionApproved, obs.EventExecutionRejected, obs.EventExecutionCanceled, obs.EventApprovalWithdrawn} {
+		line := firstEvent(lines(), event)
+		if line == nil {
+			t.Errorf("no %s line", event)
+			continue
+		}
+		if line[obs.AttrMigrationVersion] != float64(version) || line[obs.AttrMigrationRevision] != float64(3) {
+			t.Errorf("%s = %v, want version 2 and revision 3", event, line)
+		}
+	}
+}
+
+func TestANonAdminRefusedByRequireAdminIsLoggedAsDenied(t *testing.T) {
+	lines := captureLogs(t)
+	e := newApprovalEnv(t)
+
+	r := call(e.as(e.dev), "GET", "/api/admin/users", nil)
+	if r.Code != 403 {
+		t.Fatalf("non-admin GET = %d, want 403", r.Code)
+	}
+	line := firstEvent(lines(), obs.EventAuthzDenied)
+	if line == nil {
+		t.Fatal("no authz.denied line")
+	}
+	if line[obs.AttrActorID] != float64(e.dev.ID) || line[obs.AttrMethod] != "GET" || line[obs.AttrPath] != "/api/admin/users" || line["code"] != "FORBIDDEN" {
+		t.Errorf("authz.denied = %v", line)
+	}
+	if line[obs.AttrCorrelationID] == nil {
+		t.Error("authz.denied has no correlation_id")
+	}
+
+	before := len(lines())
+	if r := call(e.as(e.admin), "GET", "/api/admin/users", nil); r.Code != 200 {
+		t.Fatalf("admin GET = %d", r.Code)
+	}
+	for _, l := range lines()[before:] {
+		if l[obs.AttrEvent] == obs.EventAuthzDenied {
+			t.Errorf("an admin request logged %v", l)
+		}
 	}
 }

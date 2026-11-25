@@ -1,4 +1,4 @@
-// Package migration manages drafts and executes migrations on target databases.
+// Package migration manages migration recipes and submits their executions; the worker runs them.
 package migration
 
 import (
@@ -6,8 +6,8 @@ import (
 	"database/sql"
 )
 
-// LedgerTable lives in each target's public schema. It is written in the same transaction
-// as the migration, so a row exists exactly when that migration committed.
+// LedgerTable is the version ledger the retired Milestone 1 execution wrote in each target's
+// public schema. It is no longer written, but old targets still have it, so the explorer hides it.
 const LedgerTable = "_platform_migrations"
 
 const ExecutionLedgerTable = "_platform_executions"
@@ -47,6 +47,13 @@ func RecordExecution(ctx context.Context, tx *sql.Tx, e LedgerEntry) error {
 		INSERT INTO public.`+ExecutionLedgerTable+` (execution_id, batch_no, range_from, range_to, row_count)
 		VALUES ($1, $2, $3, $4, $5)`,
 		e.ExecutionID, e.BatchNo, e.RangeFrom, e.RangeTo, e.RowCount)
+	return err
+}
+
+func RecordRowCount(ctx context.Context, tx *sql.Tx, executionID uint, batchNo int, rows int64) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE public.`+ExecutionLedgerTable+` SET row_count = $3 WHERE execution_id = $1 AND batch_no = $2`,
+		executionID, batchNo, rows)
 	return err
 }
 

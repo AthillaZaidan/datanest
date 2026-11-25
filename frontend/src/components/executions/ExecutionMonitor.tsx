@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { ApiError } from '../../api/client'
 import {
   type Execution,
@@ -6,6 +7,7 @@ import {
   approveExecution,
   cancelExecution,
   getExecution,
+  isHeld,
   rejectExecution,
   withdrawApproval,
 } from '../../api/executions'
@@ -45,6 +47,7 @@ function Progress({ execution: e }: { execution: Execution }) {
   if (!p) return null
   const total = e.batchSize && p.estimatedRows ? Math.ceil(p.estimatedRows / e.batchSize) : null
   const pct = total ? Math.min(100, Math.round((p.committedBatches / total) * 100)) : null
+  const undo = e.kind === 'rollback'
   return (
     <Section title="Progres batch" aside={pct === null ? undefined : `${pct}%`}>
       {pct !== null && (
@@ -60,14 +63,35 @@ function Progress({ execution: e }: { execution: Execution }) {
         </div>
       )}
       <dl>
-        <Meta label="Batch committed">
+        <Meta label={undo ? 'Batch dibatalkan' : 'Batch committed'}>
           <span className="num">{nf.format(p.committedBatches)}{total !== null && ` dari ${nf.format(total)}`}</span>
         </Meta>
-        <Meta label="Row committed">
+        <Meta label={undo ? 'Row dibatalkan' : 'Row committed'}>
           <span className="num">{nf.format(p.committedRows)}{p.estimatedRows !== null && ` dari ±${nf.format(p.estimatedRows)}`}</span>
         </Meta>
         <Meta label="Cursor terakhir"><span className={ui.ident}>{p.lastCursor ?? '-'}</span></Meta>
         <Meta label="Batas cakupan"><span className={ui.ident}>{p.scopeMax ?? '-'}</span></Meta>
+      </dl>
+    </Section>
+  )
+}
+
+function Details({ execution: e }: { execution: Execution }) {
+  return (
+    <Section title="Detail">
+      <dl>
+        <Meta label="Migration"><Link className={ui.link} to={`/migrations/${e.migrationId}`}>Migration #{e.migrationId}</Link></Meta>
+        <Meta label="Versi">{e.version ? <span className="font-mono">v{e.version}</span> : <span className="text-muted">belum diberi</span>}</Meta>
+        <Meta label="Revisi"><span className="num">{e.revision}</span></Meta>
+        {e.batchTable && <Meta label="Tabel batch"><span className={ui.ident}>{e.batchTable}</span></Meta>}
+        {e.batchColumn && <Meta label="Kolom batch"><span className={ui.ident}>{e.batchColumn}</span></Meta>}
+        {e.batchSize !== null && <Meta label="Ukuran batch"><span className="num">{nf.format(e.batchSize)}</span></Meta>}
+        {e.continuesExecutionId !== null && (
+          <Meta label="Melanjutkan"><Link className={ui.link} to={`/executions/${e.continuesExecutionId}`}>E{e.continuesExecutionId}</Link></Meta>
+        )}
+        {e.revertsExecutionId !== null && (
+          <Meta label="Membatalkan"><Link className={ui.link} to={`/executions/${e.revertsExecutionId}`}>E{e.revertsExecutionId}</Link></Meta>
+        )}
       </dl>
     </Section>
   )
@@ -157,17 +181,28 @@ export default function ExecutionMonitor({ executionId, fetcher = getExecution }
     <div className="space-y-6">
       <div>
         <div className="flex flex-wrap items-center gap-2">
-          <ExecutionStatusBadge status={e.status} />
+          <ExecutionStatusBadge status={e.status} kind={e.kind} />
           <Pill>{kindLabel[e.kind]}</Pill>
           <Pill>{e.mode === 'batch' ? 'Per batch' : 'Normal'}</Pill>
         </div>
         <div className="mt-2"><PollNote watch={watch} /></div>
       </div>
 
-      {e.errorMessage && (
-        <Alert>
-          {e.errorCode && <span className="font-mono">{e.errorCode} </span>}
-          {e.errorMessage}
+      {e.errorMessage &&
+        (isHeld(e) ? (
+          <Alert tone="warning">Ditahan: {e.errorMessage}</Alert>
+        ) : (
+          <Alert>
+            {e.errorCode && <span className="font-mono">{e.errorCode} </span>}
+            {e.errorMessage}
+          </Alert>
+        ))}
+
+      {e.status === 'partial' && (
+        <Alert tone="warning" action={<Link className={ui.buttonSm} to={`/migrations/${e.migrationId}`}>Buka migration</Link>}>
+          {e.kind === 'rollback'
+            ? 'Rollback berhenti di tengah jalan. Lanjutkan dari halaman migration.'
+            : 'Eksekusi berhenti di tengah jalan. Lanjutkan atau batalkan dari halaman migration.'}
         </Alert>
       )}
 
@@ -177,6 +212,8 @@ export default function ExecutionMonitor({ executionId, fetcher = getExecution }
           disetujui. Minta Platform Admin menetapkan leader di halaman Groups.
         </Alert>
       )}
+
+      <Details execution={e} />
 
       <Progress execution={e} />
 

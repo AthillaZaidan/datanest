@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -188,5 +189,19 @@ func TestStartBatchNamesTheBatch(t *testing.T) {
 	s.End()
 	if got := rec.Ended()[0].Name(); got != "batch[3]" {
 		t.Errorf("name = %q", got)
+	}
+}
+
+func TestMigrationVersionAttrs(t *testing.T) {
+	version := 3
+	got := MigrationVersionAttrs(&version, 2)
+	want := []any{AttrMigrationRevision, 2, AttrMigrationVersion, 3}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("with a version = %v, want %v", got, want)
+	}
+	got = MigrationVersionAttrs(nil, 1)
+	want = []any{AttrMigrationRevision, 1}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("without a version = %v, want %v", got, want)
 	}
 }

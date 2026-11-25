@@ -66,6 +66,7 @@ func TestMigrateBackfillsM1History(t *testing.T) {
 	v1 := m1(1, models.MigrationSuccess)
 	v2 := m1(2, models.MigrationFailed)
 	running := m1(4, models.MigrationRunning)
+	runningWithoutVersion := m1(0, models.MigrationRunning)
 	draft := m1(0, models.MigrationDraft)
 
 	for i := 0; i < 2; i++ { // the second run must change nothing
@@ -79,7 +80,7 @@ func TestMigrateBackfillsM1History(t *testing.T) {
 	want := []struct {
 		id     uint
 		status models.ExecutionStatus
-	}{{v1.ID, models.ExecSuccess}, {v2.ID, models.ExecFailed}, {v3.ID, models.ExecSuccess}}
+	}{{v1.ID, models.ExecSuccess}, {v2.ID, models.ExecFailed}, {v3.ID, models.ExecSuccess}, {running.ID, models.ExecFailed}}
 	if len(execs) != len(want) {
 		t.Fatalf("executions = %d, want %d: %+v", len(execs), len(want), execs)
 	}
@@ -101,15 +102,139 @@ func TestMigrateBackfillsM1History(t *testing.T) {
 			t.Errorf("recipe %d = %+v", m.ID, got)
 		}
 	}
-	for _, m := range []models.Migration{running, draft} {
-		var got models.Migration
-		db.First(&got, m.ID)
-		if got.Irreversible || got.FrozenAt != nil || got.Status != m.Status {
-			t.Errorf("migration %d (%s) must be left alone: %+v", m.ID, m.Status, got)
-		}
+	var interrupted models.Migration
+	db.First(&interrupted, running.ID)
+	if interrupted.Status != models.MigrationFailed || interrupted.ErrorMessage != models.M1InterruptedReason ||
+		interrupted.FinishedAt == nil || interrupted.FrozenAt == nil || !interrupted.Irreversible {
+		t.Errorf("running row was not settled as failed: %+v", interrupted)
+	}
+	if execs[3].ErrorMessage != models.M1InterruptedReason || execs[3].FinishedAt == nil {
+		t.Errorf("interrupted attempt = %+v", execs[3])
+	}
+
+	var orphan models.Migration
+	db.First(&orphan, runningWithoutVersion.ID)
+	if orphan.Status != models.MigrationFailed || orphan.ErrorMessage != models.M1InterruptedReason || orphan.FinishedAt == nil {
+		t.Errorf("running row without version = %+v", orphan)
+	}
+	var orphanRuns int64
+	db.Model(&models.MigrationExecution{}).Where("migration_id = ?", orphan.ID).Count(&orphanRuns)
+	if orphanRuns != 0 {
+		t.Errorf("running row without version recorded %d executions", orphanRuns)
+	}
+
+	var untouched models.Migration
+	db.First(&untouched, draft.ID)
+	if untouched.Irreversible || untouched.FrozenAt != nil || untouched.Status != models.MigrationDraft {
+		t.Errorf("draft must be left alone: %+v", untouched)
 	}
 
 	if v, err := position.Current(ctx, db, conn.ID); err != nil || v != 3 {
 		t.Errorf("current version after backfill = %d, %v; want 3", v, err)
+	}
+}
+
+func TestMigrateNumbersStartedExecutionsInStartOrder(t *testing.T) {
+	db := testutil.PlatformDB(t)
+	conn := testutil.CreateDatabaseConnection(t, db, "toko")
+	other := testutil.CreateDatabaseConnection(t, db, "gudang")
+	base := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	at := func(minutes int) *time.Time {
+		v := base.Add(time.Duration(minutes) * time.Minute)
+		return &v
+	}
+	create := func(databaseID uint, status models.ExecutionStatus, startedAt *time.Time) models.MigrationExecution {
+		return testutil.CreateExecution(t, db, models.MigrationExecution{DatabaseID: databaseID, Status: status, StartedAt: startedAt})
+	}
+	late := create(conn.ID, models.ExecSuccess, at(30))
+	early := create(conn.ID, models.ExecFailed, at(10))
+	runningWithoutStart := create(conn.ID, models.ExecRunning, nil)
+	pending := create(conn.ID, models.ExecQueued, nil)
+	approved := create(conn.ID, models.ExecApproved, nil)
+	elsewhere := create(other.ID, models.ExecSuccess, at(5))
+
+	seeded := create(conn.ID, models.ExecSuccess, at(1))
+	if err := db.Model(&seeded).Update("run_seq", 7).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := func() map[uint]*int64 {
+		var rows []models.MigrationExecution
+		db.Find(&rows)
+		out := map[uint]*int64{}
+		for _, r := range rows {
+			out[r.ID] = r.RunSeq
+		}
+		return out
+	}
+	for i := 0; i < 2; i++ {
+		if err := models.Migrate(db); err != nil {
+			t.Fatalf("Migrate #%d: %v", i+1, err)
+		}
+		got := snapshot()
+		want := map[uint]int64{seeded.ID: 7, early.ID: 8, late.ID: 9, runningWithoutStart.ID: 10, elsewhere.ID: 1}
+		for id, seq := range want {
+			if got[id] == nil || *got[id] != seq {
+				t.Errorf("Migrate #%d: execution %d run_seq = %v, want %d", i+1, id, got[id], seq)
+			}
+		}
+		for _, id := range []uint{pending.ID, approved.ID} {
+			if got[id] != nil {
+				t.Errorf("Migrate #%d: pending execution %d got run_seq %d", i+1, id, *got[id])
+			}
+		}
+	}
+}
+
+func TestMigrateBackfillsTheVersionAndRevisionOfExecutions(t *testing.T) {
+	db := testutil.PlatformDB(t)
+	conn := testutil.CreateDatabaseConnection(t, db, "toko")
+	version := 4
+	m := models.Migration{DatabaseID: conn.ID, SQL: "SELECT 1", Status: models.MigrationSuccess, Version: &version, Revision: 3}
+	if err := db.Create(&m).Error; err != nil {
+		t.Fatal(err)
+	}
+	unversioned := models.Migration{DatabaseID: conn.ID, SQL: "SELECT 2", Status: models.MigrationDraft, Revision: 2}
+	if err := db.Create(&unversioned).Error; err != nil {
+		t.Fatal(err)
+	}
+	create := func(migrationID uint, status models.ExecutionStatus) models.MigrationExecution {
+		return testutil.CreateExecution(t, db, models.MigrationExecution{MigrationID: migrationID, DatabaseID: conn.ID, Status: status})
+	}
+	started := create(m.ID, models.ExecSuccess)
+	waiting := create(m.ID, models.ExecPendingReview)
+	draftRequest := create(unversioned.ID, models.ExecPendingReview)
+	own := create(m.ID, models.ExecSuccess)
+	ownVersion, ownRevision := 9, 8
+	if err := db.Model(&own).Updates(map[string]any{"version": ownVersion, "revision": ownRevision}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := models.Migrate(db); err != nil {
+			t.Fatalf("Migrate #%d: %v", i+1, err)
+		}
+		get := func(id uint) models.MigrationExecution {
+			var e models.MigrationExecution
+			if err := db.First(&e, id).Error; err != nil {
+				t.Fatal(err)
+			}
+			return e
+		}
+		check := func(name string, id uint, wantVersion, wantRevision int) {
+			t.Helper()
+			e := get(id)
+			gotVersion := 0
+			if e.Version != nil {
+				gotVersion = *e.Version
+			}
+			if gotVersion != wantVersion || e.Revision != wantRevision {
+				t.Errorf("Migrate #%d: %s has version %d revision %d, want %d %d (0 means no version)", i+1, name, gotVersion, e.Revision, wantVersion, wantRevision)
+			}
+		}
+		check("started execution", started.ID, version, 3)
+		check("waiting execution", waiting.ID, 0, 3)
+		check("request of a draft", draftRequest.ID, 0, 2)
+		check("execution with its own values", own.ID, ownVersion, ownRevision)
 	}
 }

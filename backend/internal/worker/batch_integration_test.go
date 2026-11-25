@@ -243,10 +243,7 @@ func TestAPermanentErrorInTheMiddleLeavesAPartialExecution(t *testing.T) {
 	}
 
 	stranger := e.newExec(models.MigrationExecution{})
-	e.mustProcess(stranger.ID)
-	if got := e.expectStatus(stranger.ID, models.ExecFailed); got.ErrorCode != "BLOCKED" {
-		t.Errorf("an unrelated execution ran on a database with a partial one: %+v", got)
-	}
+	e.expectHeld(stranger.ID, x.ID)
 }
 
 func TestAPartialExecutionCanBeContinuedFromItsCursor(t *testing.T) {
@@ -269,9 +266,7 @@ func TestAPartialExecutionCanBeContinuedFromItsCursor(t *testing.T) {
 
 	next := e.newExec(models.MigrationExecution{})
 	e.mustProcess(next.ID)
-	if got := e.expectStatus(next.ID, models.ExecSuccess); got.ErrorCode == "BLOCKED" {
-		t.Error("a settled partial execution still blocks the database")
-	}
+	e.expectStatus(next.ID, models.ExecSuccess)
 }
 
 func TestABatchRollbackUndoesTheBatchesInReverseOrder(t *testing.T) {

@@ -39,20 +39,34 @@ func Migrate(db *gorm.DB) error {
 	if err := backfillM1History(db); err != nil {
 		return err
 	}
+	if err := backfillRunSeq(db); err != nil {
+		return err
+	}
+	if err := backfillVersionAndRevision(db); err != nil {
+		return err
+	}
 	return db.Where(Role{Name: RolePlatformAdmin}).FirstOrCreate(&Role{}).Error
 }
 
 // M1Reason marks migrations created before down SQL existed.
 const M1Reason = "Dibuat di Milestone 1, sebelum ada SQL down."
 
+const M1InterruptedReason = "Eksekusi terputus sebelum Milestone 2."
+
 // backfillM1History turns each executed Milestone 1 migration into a frozen,
 // irreversible recipe plus one run execution, in version order, so the active position
 // can be derived from executions. Rows that already have an execution are skipped, so
-// it is safe to run on every start. Migrations still running are left to Reconcile,
-// which checks the target ledger before settling them.
+// it is safe to run on every start. Migrations still running were interrupted by the
+// retired Milestone 1 path, which can no longer settle them, so they are failed first
+// and recorded like the others; one without a version is failed and not recorded.
 func backfillM1History(db *gorm.DB) error {
 	return db.Transaction(func(tx *gorm.DB) error {
-		err := tx.Exec(`UPDATE migrations SET irreversible = true, irreversible_reason = ?,
+		err := tx.Exec(`UPDATE migrations SET status = 'failed', error_message = ?,
+			finished_at = COALESCE(finished_at, now()) WHERE status = 'running'`, M1InterruptedReason).Error
+		if err != nil {
+			return err
+		}
+		err = tx.Exec(`UPDATE migrations SET irreversible = true, irreversible_reason = ?,
 			frozen_at = COALESCE(frozen_at, started_at, updated_at)
 			WHERE sql_down = '' AND `+unrecordedRun, M1Reason).Error
 		if err != nil {
@@ -60,13 +74,6 @@ func backfillM1History(db *gorm.DB) error {
 		}
 		return insertRunExecutions(tx, "TRUE")
 	})
-}
-
-// RecordLegacyRun records the result of the Milestone 1 direct execution of one
-// migration as a run execution. It does nothing until the migration has settled and
-// nothing if the run was recorded already.
-func RecordLegacyRun(db *gorm.DB, migrationID uint) error {
-	return insertRunExecutions(db, "id = ?", migrationID)
 }
 
 // unrecordedRun selects migrations that settled through the Milestone 1 path and
@@ -82,4 +89,31 @@ func insertRunExecutions(db *gorm.DB, filter string, args ...any) error {
 			COALESCE(started_at, created_at), now(), started_at, finished_at
 		FROM migrations WHERE `+unrecordedRun+` AND (`+filter+`)
 		ORDER BY database_id, version`, args...).Error
+}
+
+func backfillRunSeq(db *gorm.DB) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		return tx.Exec(`UPDATE migration_executions e SET run_seq = n.seq
+			FROM (
+				SELECT x.id, COALESCE(
+						(SELECT MAX(r.run_seq) FROM migration_executions r WHERE r.database_id = x.database_id), 0)
+					+ ROW_NUMBER() OVER (PARTITION BY x.database_id ORDER BY COALESCE(x.started_at, x.created_at), x.id) AS seq
+				FROM migration_executions x
+				WHERE x.run_seq IS NULL
+					AND (x.started_at IS NOT NULL OR x.status IN ('running', 'success', 'failed', 'partial', 'uncertain'))
+			) n WHERE e.id = n.id`).Error
+	})
+}
+
+func backfillVersionAndRevision(db *gorm.DB) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		err := tx.Exec(`UPDATE migration_executions e SET revision = m.revision
+			FROM migrations m WHERE m.id = e.migration_id AND e.revision = 0 AND m.revision <> 0`).Error
+		if err != nil {
+			return err
+		}
+		return tx.Exec(`UPDATE migration_executions e SET version = m.version
+			FROM migrations m WHERE m.id = e.migration_id AND e.version IS NULL AND m.version IS NOT NULL
+				AND (e.started_at IS NOT NULL OR e.status IN ('running', 'success', 'failed', 'partial', 'uncertain'))`).Error
+	})
 }

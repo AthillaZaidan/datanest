@@ -6,6 +6,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration/sqlguard"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
@@ -13,11 +14,12 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/position"
 )
 
-// Submit asks for an execution of a migration (design D3/D9): run for its first attempt,
-// forward to apply it again, rollback to undo it. The version rules are checked now and
-// again by the worker (Revalidate). The request starts as pending_review; approval and
-// the queue take it from there.
-func (s *Service) Submit(ctx context.Context, userID, migrationID uint, kind models.ExecutionKind) (*models.MigrationExecution, error) {
+// Submit asks for an execution of a migration (design D3/D9): run for the first attempt
+// that really starts, forward to apply it again or to continue a partial one, rollback to
+// undo it (partial or not) or to continue a partial rollback. The version rules are checked
+// now and again by the worker (Revalidate). The request starts as pending_review; approval
+// and the queue take it from there.
+func (s *Service) Submit(ctx context.Context, userID, migrationID uint, kind models.ExecutionKind, batchSize *int) (*models.MigrationExecution, error) {
 	m, err := s.loadAuthorized(ctx, userID, migrationID, authz.ExecuteMigration)
 	if err != nil {
 		return nil, err
@@ -26,6 +28,16 @@ func (s *Service) Submit(ctx context.Context, userID, migrationID uint, kind mod
 	if err != nil {
 		return nil, err
 	}
+
+	if err := checkBatchSize(m, kind, batchSize); err != nil {
+		return nil, err
+	}
+	if batched(m, kind) {
+		if err := s.checkBatchTarget(ctx, m); err != nil {
+			return nil, err
+		}
+	}
+	revision := m.Revision
 
 	var out models.MigrationExecution
 	err = s.platform.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -36,6 +48,9 @@ func (s *Service) Submit(ctx context.Context, userID, migrationID uint, kind mod
 		}
 		if err := tx.First(m, m.ID).Error; err != nil {
 			return err
+		}
+		if m.Revision != revision {
+			return apperr.ErrRevisionConflict
 		}
 		st, versions, err := position.Load(ctx, tx, m.DatabaseID, 0)
 		if err != nil {
@@ -48,10 +63,16 @@ func (s *Service) Submit(ctx context.Context, userID, migrationID uint, kind mod
 		if err := sqlguard.Check(plan.SQL); err != nil {
 			return err
 		}
+		if plan.Kind == models.ExecKindRun {
+			if err := sqlguard.Check(m.SQLDown); err != nil {
+				return err
+			}
+		}
 		out = models.MigrationExecution{
-			MigrationID: m.ID, DatabaseID: m.DatabaseID,
-			Kind: plan.Kind, Status: models.ExecPendingReview, Mode: models.ExecModeNormal,
-			SQLExecuted: plan.SQL, RevertsExecutionID: plan.Reverts,
+			MigrationID: m.ID, DatabaseID: m.DatabaseID, Version: m.Version, Revision: m.Revision,
+			Kind: plan.Kind, Status: models.ExecPendingReview,
+			Mode: m.Mode, BatchSize: batchSize, BatchTable: m.BatchTable, BatchColumn: m.BatchColumn,
+			SQLExecuted: plan.SQL, RevertsExecutionID: plan.Reverts, ContinuesExecutionID: plan.Continues,
 			RequestedByID: &u.ID, RequestedByUsername: u.Username,
 		}
 		return tx.Create(&out).Error
@@ -59,7 +80,8 @@ func (s *Service) Submit(ctx context.Context, userID, migrationID uint, kind mod
 	if err != nil {
 		return nil, err
 	}
-	slog.InfoContext(ctx, obs.EventExecutionRequested, obs.AttrActorID, u.ID, obs.AttrActor, u.Username, obs.AttrMigrationID, m.ID,
-		obs.AttrExecutionID, out.ID, obs.AttrDatabaseID, out.DatabaseID, "kind", string(out.Kind), obs.AttrStatus, string(out.Status))
+	slog.InfoContext(ctx, obs.EventExecutionRequested, append([]any{obs.AttrActorID, u.ID, obs.AttrActor, u.Username, obs.AttrMigrationID, m.ID,
+		obs.AttrExecutionID, out.ID, obs.AttrDatabaseID, out.DatabaseID, "kind", string(out.Kind), obs.AttrStatus, string(out.Status)},
+		obs.MigrationVersionAttrs(out.Version, out.Revision)...)...)
 	return &out, nil
 }

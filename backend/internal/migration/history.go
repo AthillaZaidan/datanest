@@ -13,6 +13,7 @@ type HistoryItem struct {
 	ID                 uint                   `json:"id"`
 	MigrationID        uint                   `json:"migrationId"`
 	Version            *int                   `json:"version"`
+	Revision           int                    `json:"revision"`
 	Kind               models.ExecutionKind   `json:"kind"`
 	Status             models.ExecutionStatus `json:"status"`
 	SQLExecuted        string                 `json:"sqlExecuted"`
@@ -39,22 +40,19 @@ func (s *Service) History(ctx context.Context, userID, databaseID uint, hideRoll
 	if err := s.authorize(ctx, userID, databaseID, authz.ViewMigrations); err != nil {
 		return nil, err
 	}
-	var rows []struct {
-		models.MigrationExecution
-		Version *int
-	}
+	var rows []models.MigrationExecution
 	err := s.platform.WithContext(ctx).Table("migration_executions e").
-		Select("e.*, m.version").Joins("JOIN migrations m ON m.id = e.migration_id").
+		Select("e.id, e.migration_id, COALESCE(e.version, m.version) AS version, e.revision, e.kind, e.status, e.sql_executed, "+
+			"e.reverts_execution_id, e.requested_by_id, e.requested_by_username, e.error_code, e.error_message, e.started_at, e.finished_at").Joins("JOIN migrations m ON m.id = e.migration_id").
 		Where("e.database_id = ? AND e.status IN ?", databaseID, historyStatuses).
-		Order("e.id").Scan(&rows).Error
+		Order("e.run_seq NULLS LAST, e.id").Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
 	items := make([]HistoryItem, len(rows))
-	for i, r := range rows {
-		e := r.MigrationExecution
+	for i, e := range rows {
 		items[i] = HistoryItem{
-			ID: e.ID, MigrationID: e.MigrationID, Version: r.Version, Kind: e.Kind, Status: e.Status,
+			ID: e.ID, MigrationID: e.MigrationID, Version: e.Version, Revision: e.Revision, Kind: e.Kind, Status: e.Status,
 			SQLExecuted: e.SQLExecuted, RevertsExecutionID: e.RevertsExecutionID,
 			RequestedBy: userLabel(e.RequestedByID, e.RequestedByUsername),
 			ErrorCode:   e.ErrorCode, ErrorMessage: e.ErrorMessage, StartedAt: e.StartedAt, FinishedAt: e.FinishedAt,

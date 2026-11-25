@@ -143,6 +143,12 @@ export function snapshot(name: string, elapsedMs: number, startedAt = 0): Execut
     status: p.status,
     mode: s.mode,
     batchSize: s.mode === 'batch' ? BATCH_SIZE : null,
+    batchTable: s.mode === 'batch' ? 'orders' : undefined,
+    batchColumn: s.mode === 'batch' ? 'id' : undefined,
+    revertsExecutionId: null,
+    continuesExecutionId: null,
+    version: p.startedAtMs === undefined ? null : 7,
+    revision: 1,
     progress: p.progress ?? null,
     attempts: (p.attempts ?? []).map((a, i) => ({
       number: i + 1,

@@ -3,6 +3,7 @@ package obs
 
 const (
 	EventHTTPRequest        = "http.request"
+	EventHTTPPanic          = "http.panic"
 	EventAuthLogin          = "auth.login"
 	EventAuthzDenied        = "authz.denied"
 	EventExplorerQuery      = "explorer.query"
@@ -40,11 +41,13 @@ const (
 	AttrError      = "error"
 	AttrSQLState   = "sqlstate"
 
-	AttrMigrationID = "migration_id"
-	AttrExecutionID = "execution_id"
-	AttrJobID       = "job_id"
-	AttrAttempt     = "attempt"
-	AttrBatchNo     = "batch_no"
+	AttrMigrationID       = "migration_id"
+	AttrMigrationVersion  = "migration_version"
+	AttrMigrationRevision = "migration_revision"
+	AttrExecutionID       = "execution_id"
+	AttrJobID             = "job_id"
+	AttrAttempt           = "attempt"
+	AttrBatchNo           = "batch_no"
 
 	AttrMethod  = "method"
 	AttrPath    = "path"
@@ -52,6 +55,14 @@ const (
 	AttrLeader  = "leader_id"
 	AttrAction  = "action"
 )
+
+func MigrationVersionAttrs(version *int, revision int) []any {
+	attrs := []any{AttrMigrationRevision, revision}
+	if version != nil {
+		attrs = append(attrs, AttrMigrationVersion, *version)
+	}
+	return attrs
+}
 
 const (
 	SpanAPIApprove    = "api.approve"

@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration/sqlguard"
+	"github.com/AthillaZaidan/datanest/backend/internal/models"
 	"github.com/AthillaZaidan/datanest/backend/internal/targeterr"
 )
 
@@ -59,6 +62,9 @@ func (s *Service) Explain(ctx context.Context, userID, migrationID uint, analyze
 	m, err := s.loadAuthorized(ctx, userID, migrationID, action)
 	if err != nil {
 		return nil, err
+	}
+	if m.Mode == models.ExecModeBatch {
+		return nil, apperr.ErrValidation.WithMessage("Analisis execution plan tidak tersedia untuk migration per-batch.")
 	}
 	if err := sqlguard.Check(m.SQL); err != nil {
 		return nil, err
@@ -158,4 +164,15 @@ func (p *StatementPlan) parse(raw []byte) error {
 	}
 	walk(out[0].Plan, 0)
 	return nil
+}
+
+func (s *Service) limits() []string {
+	out := []string{"SET LOCAL standard_conforming_strings = on"}
+	if s.opts.LockTimeout > 0 {
+		out = append(out, fmt.Sprintf("SET LOCAL lock_timeout = %d", s.opts.LockTimeout.Milliseconds()))
+	}
+	if s.opts.StatementTimeout > 0 {
+		out = append(out, fmt.Sprintf("SET LOCAL statement_timeout = %d", s.opts.StatementTimeout.Milliseconds()))
+	}
+	return out
 }

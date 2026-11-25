@@ -15,9 +15,9 @@ func TestResponseAppError(t *testing.T) {
 }
 
 func TestResponseWrappedAppError(t *testing.T) {
-	err := fmt.Errorf("execute migration: %w", ErrMigrationRunning)
+	err := fmt.Errorf("execute migration: %w", ErrMigrationNotDraft)
 	status, body := Response(err)
-	if status != http.StatusConflict || body.Error.Code != "MIGRATION_RUNNING" {
+	if status != http.StatusConflict || body.Error.Code != "MIGRATION_NOT_DRAFT" {
 		t.Fatalf("got %d %+v", status, body)
 	}
 }
@@ -59,7 +59,7 @@ func TestCodesAreUnique(t *testing.T) {
 	all := []*Error{
 		ErrValidation, ErrTransactionControlNotAllowed, ErrUnauthenticated, ErrInvalidCredentials,
 		ErrForbidden, ErrCSRFInvalid, ErrOriginNotAllowed, ErrNotFound, ErrUsernameTaken, ErrConflict,
-		ErrMigrationRunning, ErrMigrationNotDraft, ErrExecutionStateConflict, ErrRollbackNotAllowed,
+		ErrMigrationNotDraft, ErrExecutionStateConflict, ErrRollbackNotAllowed,
 		ErrForwardNotAllowed, ErrRevisionConflict, ErrUnsupportedMediaType,
 		ErrInternal, ErrNotImplemented, ErrTargetDBUnavailable, ErrTargetDBTimeout,
 		ErrNotAnApprover, ErrGroupWithoutLeader,

@@ -44,6 +44,12 @@ export type Execution = {
   status: ExecutionStatus
   mode: 'normal' | 'batch'
   batchSize: number | null
+  batchTable?: string
+  batchColumn?: string
+  revertsExecutionId: number | null
+  continuesExecutionId: number | null
+  version: number | null
+  revision: number
   progress: ExecutionProgress | null
   attempts: Attempt[]
   errorCode?: string
@@ -57,6 +63,12 @@ export type Execution = {
   startedAt: string | null
   finishedAt: string | null
 }
+
+const openStatuses: ReadonlySet<ExecutionStatus> = new Set(['pending_review', 'approved', 'queued', 'running', 'uncertain'])
+
+export const isOpenExecution = (status: ExecutionStatus) => openStatuses.has(status)
+
+export const isHeld = (e: Pick<Execution, 'errorCode'>) => e.errorCode === 'HELD'
 
 export const pollDelayMs: Record<ExecutionStatus, number | null> = {
   pending_review: 10_000,

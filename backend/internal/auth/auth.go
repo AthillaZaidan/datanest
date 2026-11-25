@@ -175,6 +175,8 @@ func (s *Service) RequireAdmin(c *gin.Context) {
 		return
 	}
 	if !admin {
+		slog.WarnContext(c.Request.Context(), obs.EventAuthzDenied, obs.AttrMethod, c.Request.Method, obs.AttrPath, c.Request.URL.Path,
+			"code", apperr.ErrForbidden.Code, obs.AttrActorID, id)
 		respond(c, apperr.ErrForbidden)
 		return
 	}

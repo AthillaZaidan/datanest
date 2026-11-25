@@ -78,7 +78,7 @@ func run() error {
 	}
 
 	db, err := gorm.Open(postgres.Open(cfg.PlatformDSN), &gorm.Config{
-		Logger: logger.New(log.New(os.Stderr, "", log.LstdFlags), logger.Config{
+		Logger: logger.New(log.Default(), logger.Config{
 			SlowThreshold:             200 * time.Millisecond,
 			LogLevel:                  logger.Warn,
 			IgnoreRecordNotFoundError: true,

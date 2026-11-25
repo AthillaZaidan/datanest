@@ -137,9 +137,9 @@ func (s *Service) Approve(ctx context.Context, userID, executionID uint) (*model
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
-	slog.InfoContext(ctx, obs.EventExecutionApproved, obs.AttrActorID, userID, obs.AttrActor, u.Username,
+	slog.InfoContext(ctx, obs.EventExecutionApproved, append([]any{obs.AttrActorID, userID, obs.AttrActor, u.Username,
 		obs.AttrMigrationID, out.MigrationID, obs.AttrExecutionID, out.ID, obs.AttrJobID, out.ID, obs.AttrDatabaseID, out.DatabaseID,
-		obs.AttrStatus, string(out.Status))
+		obs.AttrStatus, string(out.Status)}, obs.MigrationVersionAttrs(out.Version, out.Revision)...)...)
 
 	if out.Status == models.ExecApproved {
 		return s.Promote(ctx, out.ID)
@@ -304,8 +304,9 @@ func (s *Service) finishReview(ctx context.Context, userID, executionID uint, to
 	if err != nil {
 		return nil, err
 	}
-	slog.InfoContext(ctx, event, obs.AttrActorID, userID, obs.AttrMigrationID, out.MigrationID, obs.AttrExecutionID, out.ID,
-		obs.AttrJobID, out.ID, obs.AttrDatabaseID, out.DatabaseID, obs.AttrStatus, string(out.Status))
+	slog.InfoContext(ctx, event, append([]any{obs.AttrActorID, userID, obs.AttrMigrationID, out.MigrationID, obs.AttrExecutionID, out.ID,
+		obs.AttrJobID, out.ID, obs.AttrDatabaseID, out.DatabaseID, obs.AttrStatus, string(out.Status)},
+		obs.MigrationVersionAttrs(out.Version, out.Revision)...)...)
 	return out, nil
 }
 
@@ -350,8 +351,9 @@ func (s *Service) Withdraw(ctx context.Context, userID, executionID uint) (*mode
 	if err != nil {
 		return nil, err
 	}
-	slog.InfoContext(ctx, obs.EventApprovalWithdrawn, obs.AttrActorID, userID, obs.AttrMigrationID, out.MigrationID,
-		obs.AttrExecutionID, out.ID, obs.AttrJobID, out.ID, obs.AttrDatabaseID, out.DatabaseID, obs.AttrStatus, string(out.Status))
+	slog.InfoContext(ctx, obs.EventApprovalWithdrawn, append([]any{obs.AttrActorID, userID, obs.AttrMigrationID, out.MigrationID,
+		obs.AttrExecutionID, out.ID, obs.AttrJobID, out.ID, obs.AttrDatabaseID, out.DatabaseID, obs.AttrStatus, string(out.Status)},
+		obs.MigrationVersionAttrs(out.Version, out.Revision)...)...)
 	return out, nil
 }
 

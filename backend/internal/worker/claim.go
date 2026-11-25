@@ -3,7 +3,9 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -19,6 +21,7 @@ type ClaimResult int
 const (
 	ClaimNone ClaimResult = iota
 	ClaimBusy
+	ClaimHeld
 	ClaimOK
 )
 
@@ -28,7 +31,9 @@ type Claimed struct {
 	Lease dblock.Lease
 	From  models.ExecutionStatus
 
-	span trace.Span
+	span   trace.Span
+	began  bool
+	fenced bool
 }
 
 func (cl *Claimed) bind(ctx context.Context) context.Context {
@@ -92,6 +97,14 @@ func (w *Worker) ClaimWith(ctx context.Context, id uint, traceparent string) (*C
 	}
 	slog.InfoContext(ctx, obs.EventLockAcquired, logAttrs(e, "owner", owner, "lock_token", lease.Token)...)
 
+	if e.Status == models.ExecQueued {
+		held, err := w.hold(ctx, e)
+		if err != nil || held {
+			w.locks.Release(context.WithoutCancel(ctx), lease)
+			return nil, ClaimHeld, err
+		}
+	}
+
 	claimed, err := w.store.Claim(ctx, e.ID, e.Status, owner)
 	if err != nil || claimed == nil {
 		w.locks.Release(context.WithoutCancel(ctx), lease)
@@ -100,4 +113,22 @@ func (w *Worker) ClaimWith(ctx context.Context, id uint, traceparent string) (*C
 	slog.InfoContext(ctx, "execution.claimed", logAttrs(e, obs.AttrAttempt, claimed.Attempts, "from", string(e.Status))...)
 	handedOver = true
 	return &Claimed{Exec: *claimed, Owner: owner, Lease: lease, From: e.Status, span: sp}, ClaimOK, nil
+}
+
+func (w *Worker) hold(ctx context.Context, e *models.MigrationExecution) (bool, error) {
+	blockers, err := w.store.Blockers(ctx, e)
+	if err != nil || len(blockers) == 0 {
+		return false, err
+	}
+	parts := make([]string, len(blockers))
+	for i, b := range blockers {
+		parts[i] = fmt.Sprintf("E%d (%s)", b.ID, b.Status)
+	}
+	by := strings.Join(parts, ", ")
+	message := fmt.Sprintf("Ditahan oleh eksekusi %s. Berjalan otomatis setelah eksekusi itu selesai.", by)
+	if err := w.store.Hold(ctx, e.ID, w.cfg.HoldDelay, message); err != nil {
+		return false, err
+	}
+	slog.InfoContext(ctx, "execution.held", logAttrs(e, "blockers", by)...)
+	return true, nil
 }

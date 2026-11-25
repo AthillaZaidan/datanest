@@ -34,7 +34,7 @@ func TestNewWorkerRevalidatesBeforeRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := svc.Submit(ctx, editor.ID, m.ID, models.ExecKindRun)
+	e, err := svc.Submit(ctx, editor.ID, m.ID, models.ExecKindRun, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

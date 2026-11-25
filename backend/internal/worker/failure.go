@@ -2,9 +2,11 @@ package worker
 
 import (
 	"context"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net"
 	"strings"
 	"time"
 
@@ -70,6 +72,16 @@ func classify(err error) failureKind {
 	return kindTransient
 }
 
+const msgNotInTransaction = "Statement ini tidak dapat dijalankan dalam transaction (misal CREATE INDEX CONCURRENTLY, VACUUM). " +
+	"Platform menjalankan migration dalam transaction agar dapat di-rollback."
+
+func unavailable(err error) bool {
+	var pg *pgconn.PgError
+	var network net.Error
+	return errors.As(err, &pg) && classify(err) == kindTransient ||
+		errors.As(err, &network) || errors.Is(err, driver.ErrBadConn) || errors.Is(err, context.Canceled)
+}
+
 func describe(err error) (code, message string) {
 	var perm *permanentError
 	if errors.As(err, &perm) {
@@ -77,6 +89,9 @@ func describe(err error) (code, message string) {
 	}
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) {
+		if pg.Code == "25001" {
+			return pg.Code, msgNotInTransaction
+		}
 		message = "ERROR: " + pg.Message
 		if pg.Detail != "" {
 			message += "\nDETAIL: " + pg.Detail

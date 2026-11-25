@@ -15,7 +15,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/migration"
-	"github.com/AthillaZaidan/datanest/backend/internal/models"
 	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 )
 
@@ -28,7 +27,7 @@ func sqlState(err error) string {
 }
 
 func (w *Worker) limits() []string {
-	var out []string
+	out := []string{"SET LOCAL standard_conforming_strings = on"}
 	if w.cfg.LockTimeout > 0 {
 		out = append(out, fmt.Sprintf("SET LOCAL lock_timeout = %d", w.cfg.LockTimeout.Milliseconds()))
 	}
@@ -38,7 +37,11 @@ func (w *Worker) limits() []string {
 	return out
 }
 
-func (w *Worker) applyTx(ctx context.Context, db *sql.DB, e *models.MigrationExecution, batchNo int, from, to *string, query string, args ...any) (int64, error) {
+func (w *Worker) applyTx(ctx context.Context, db *sql.DB, cl *Claimed, batchNo int, from, to *string, query string, args ...any) (int64, error) {
+	if err := w.begin(ctx, db, cl); err != nil {
+		return 0, err
+	}
+	e := &cl.Exec
 	if batchNo != migration.NormalBatch {
 		var batchSpan trace.Span
 		ctx, batchSpan = obs.StartBatch(ctx, batchNo, attribute.Int(obs.AttrBatchNo, batchNo))
@@ -60,9 +63,6 @@ func (w *Worker) applyTx(ctx context.Context, db *sql.DB, e *models.MigrationExe
 		}
 	}()
 
-	if err := migration.EnsureExecutionLedger(ctx, tx); err != nil {
-		return 0, err
-	}
 	for _, q := range w.limits() {
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return 0, err
@@ -71,6 +71,22 @@ func (w *Worker) applyTx(ctx context.Context, db *sql.DB, e *models.MigrationExe
 
 	txCtx, cancel := context.WithTimeout(ctx, w.cfg.ExecTimeout)
 	defer cancel()
+	entry := migration.LedgerEntry{ExecutionID: e.ID, BatchNo: batchNo, RangeFrom: from, RangeTo: to}
+	if err := migration.RecordExecution(txCtx, tx, entry); err != nil {
+		if ledgerConflict(err) {
+			return 0, &unknownError{err: err}
+		}
+		return 0, err
+	}
+	cl.fenced = true
+	owned, err := w.store.Owns(txCtx, e.ID, cl.Owner)
+	if err != nil {
+		return 0, err
+	}
+	if !owned {
+		return 0, errLockLost
+	}
+
 	sqlCtx, sqlSpan := obs.Start(txCtx, obs.SpanSQLQuery)
 	start := with(obs.AttrStatus, "started", obs.AttrQuery, query)
 	if len(args) > 0 {
@@ -89,12 +105,7 @@ func (w *Worker) applyTx(ctx context.Context, db *sql.DB, e *models.MigrationExe
 	rows, _ := res.RowsAffected()
 	sqlSpan.End()
 	slog.InfoContext(sqlCtx, obs.EventSQLResult, with(obs.AttrStatus, "ok", obs.AttrDurationMS, time.Since(started).Milliseconds(), obs.AttrRows, rows)...)
-	entry := migration.LedgerEntry{ExecutionID: e.ID, BatchNo: batchNo, RangeFrom: from, RangeTo: to, RowCount: max(rows, 0)}
-	if err := migration.RecordExecution(txCtx, tx, entry); err != nil {
-		var pg *pgconn.PgError
-		if errors.As(err, &pg) && pg.Code == "23505" && pg.TableName == migration.ExecutionLedgerTable {
-			return 0, &unknownError{err: err}
-		}
+	if err := migration.RecordRowCount(txCtx, tx, e.ID, batchNo, max(rows, 0)); err != nil {
 		return 0, err
 	}
 
@@ -111,6 +122,7 @@ func (w *Worker) applyTx(ctx context.Context, db *sql.DB, e *models.MigrationExe
 		slog.WarnContext(ctx, obs.EventSQLCommit, with(obs.AttrStatus, "unknown", obs.AttrError, err.Error())...)
 		return 0, &unknownError{err: err}
 	}
+	cl.fenced = false
 	slog.InfoContext(ctx, obs.EventSQLCommit, with(obs.AttrStatus, "committed", obs.AttrRows, max(rows, 0))...)
 	if h := w.Hooks.AfterCommit; h != nil {
 		if herr := h(e.ID, batchNo); herr != nil {
@@ -123,17 +135,8 @@ func (w *Worker) applyTx(ctx context.Context, db *sql.DB, e *models.MigrationExe
 	return max(rows, 0), nil
 }
 
-func (w *Worker) runNormal(ctx context.Context, db *sql.DB, e *models.MigrationExecution) (int, int64, error) {
-	entries, err := migration.LookupExecution(ctx, db, e.ID)
-	if err != nil {
-		return 0, 0, err
-	}
-	for _, entry := range entries {
-		if entry.BatchNo == migration.NormalBatch {
-			return 1, entry.RowCount, nil
-		}
-	}
-	rows, err := w.applyTx(ctx, db, e, migration.NormalBatch, nil, nil, e.SQLExecuted)
+func (w *Worker) runNormal(ctx context.Context, db *sql.DB, cl *Claimed) (int, int64, error) {
+	rows, err := w.applyTx(ctx, db, cl, migration.NormalBatch, nil, nil, cl.Exec.SQLExecuted)
 	if err != nil {
 		return 0, 0, err
 	}

@@ -19,6 +19,7 @@ export const ui = {
   buttonSmDanger: `${control} ${sm} ${danger}`,
   buttonSmGhost: `${control} ${sm} ${ghost}`,
   input: `${field} block h-10 w-full px-3`,
+  inputSm: `${field} block h-8 px-2.5`,
   select: `${field} h-8 border-control pr-8 pl-2.5`,
   selectForm: `${field} block h-10 w-full pr-8 pl-3`,
   label: 'mb-2 block text-sm font-medium',

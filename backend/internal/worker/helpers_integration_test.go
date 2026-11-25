@@ -6,6 +6,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -233,6 +235,26 @@ func (e *env) expectStatus(id uint, want models.ExecutionStatus) models.Migratio
 		e.t.Fatalf("execution %d status = %s (%s %s), want %s", id, x.Status, x.ErrorCode, x.ErrorMessage, want)
 	}
 	return x
+}
+
+func (e *env) expectHeld(id uint, blockers ...uint) {
+	e.t.Helper()
+	result, err := e.process(id)
+	if err != nil || result != ClaimHeld {
+		e.t.Fatalf("process %d = %v, %v; want held", id, result, err)
+	}
+	x := e.expectStatus(id, models.ExecQueued)
+	if x.ErrorCode != "HELD" || x.Attempts != 0 || x.NotBefore == nil || x.PublishedAt != nil {
+		e.t.Errorf("held row = %+v", x)
+	}
+	for _, b := range blockers {
+		if !strings.Contains(x.ErrorMessage, fmt.Sprintf("E%d ", b)) {
+			e.t.Errorf("reason %q does not name E%d", x.ErrorMessage, b)
+		}
+	}
+	if len(e.ledger(id)) != 0 || len(e.attempts(id)) != 0 || e.lockHeld(x.DatabaseID) {
+		e.t.Error("a held execution left a ledger row, an attempt or the lock behind")
+	}
 }
 
 func (e *env) secondDatabase() models.DatabaseConnection {

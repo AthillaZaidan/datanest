@@ -3,6 +3,8 @@ import type { Execution, ExecutionKind, ExecutionStatus } from './executions'
 
 export type MigrationStatus = 'draft' | 'running' | 'success' | 'failed'
 
+export type MigrationMode = 'normal' | 'batch'
+
 export type Migration = {
   id: number
   databaseId: number
@@ -12,6 +14,11 @@ export type Migration = {
   sqlDown: string
   irreversible: boolean
   irreversibleReason?: string
+  mode: MigrationMode
+  batchTable: string
+  batchColumn: string
+  lastExecution: { id: number; kind: ExecutionKind; status: ExecutionStatus } | null
+  partial: { executionId: number; kind: ExecutionKind } | null
   // Set when the first execution starts; the recipe can no longer change (spec: immutable SQL).
   frozenAt: string | null
   // From the server's derived position, the one source of truth for what is applied.
@@ -34,13 +41,17 @@ export type Migration = {
 
 // What a migration is now. M1 status alone is not enough: an M2 migration keeps status
 // draft after it runs, and a rolled-back one keeps the status of its old run.
-export type MigrationState = 'draft' | 'running' | 'active' | 'inactive' | 'failed'
+export type MigrationState = 'partial' | 'running' | 'active' | 'review' | 'draft' | 'failed' | 'inactive'
 
 export function migrationState(m: Migration): MigrationState {
-  if (m.status === 'running') return 'running'
+  const last = m.lastExecution
+  if (m.partial) return 'partial'
+  if (last && (last.status === 'queued' || last.status === 'running' || last.status === 'uncertain')) return 'running'
   if (m.active) return 'active'
+  if (last && (last.status === 'pending_review' || last.status === 'approved')) return 'review'
   if (m.status === 'draft' && !m.frozenAt && m.version === null) return 'draft'
-  return m.status === 'failed' ? 'failed' : 'inactive'
+  if (last && last.status === 'failed' && last.kind !== 'rollback') return 'failed'
+  return 'inactive'
 }
 
 export type MigrationList = { migrations: Migration[]; currentVersion: number }
@@ -52,7 +63,15 @@ export function listMigrations(databaseId: string, status = '') {
   return api<MigrationList>(`/databases/${enc(databaseId)}/migrations${q}`)
 }
 
-export type Recipe = { sqlUp: string; sqlDown: string; irreversible: boolean; irreversibleReason: string }
+export type Recipe = {
+  sqlUp: string
+  sqlDown: string
+  irreversible: boolean
+  irreversibleReason: string
+  mode: MigrationMode
+  batchTable: string
+  batchColumn: string
+}
 
 export function createMigration(databaseId: string, recipe: Recipe) {
   return send<Migration>('POST', `/databases/${enc(databaseId)}/migrations`, recipe)
@@ -71,14 +90,15 @@ export function deleteMigration(id: string) {
 }
 
 // Run, forward and rollback are new executions that go through approval and the queue.
-export function submitExecution(id: string, kind: ExecutionKind) {
-  return send<Execution>('POST', `/migrations/${enc(id)}/executions`, { kind })
+export function submitExecution(id: string, kind: ExecutionKind, batchSize?: number) {
+  return send<Execution>('POST', `/migrations/${enc(id)}/executions`, batchSize === undefined ? { kind } : { kind, batchSize })
 }
 
 export type HistoryItem = {
   id: number
   migrationId: number
   version: number | null
+  revision: number
   kind: ExecutionKind
   status: ExecutionStatus
   sqlExecuted: string

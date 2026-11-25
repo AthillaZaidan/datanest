@@ -28,12 +28,11 @@ type Service struct {
 	platform *gorm.DB
 	targets  dbconn.TargetDBProvider
 	authz    Authorizer
-	locks    *DBLocks
 	opts     Options
 }
 
 func New(platform *gorm.DB, targets dbconn.TargetDBProvider, az Authorizer, opts Options) *Service {
-	return &Service{platform: platform, targets: targets, authz: az, locks: NewDBLocks(), opts: opts}
+	return &Service{platform: platform, targets: targets, authz: az, opts: opts}
 }
 
 var (
@@ -122,6 +121,9 @@ func (s *Service) Update(ctx context.Context, userID, migrationID uint, r Recipe
 			"sql_down":            r.SQLDown,
 			"irreversible":        r.Irreversible,
 			"irreversible_reason": r.IrreversibleReason,
+			"mode":                r.Mode,
+			"batch_table":         r.BatchTable,
+			"batch_column":        r.BatchColumn,
 			"revision":            gorm.Expr("revision + 1"),
 			"updated_by_id":       u.ID,
 			"updated_by_username": u.Username,
@@ -172,8 +174,7 @@ func (s *Service) Duplicate(ctx context.Context, userID, migrationID uint) (*Vie
 	if err != nil {
 		return nil, err
 	}
-	return s.createDraft(ctx, userID, m.DatabaseID, Recipe{SQLUp: m.SQL, SQLDown: m.SQLDown,
-		Irreversible: m.Irreversible, IrreversibleReason: m.IrreversibleReason})
+	return s.createDraft(ctx, userID, m.DatabaseID, recipeOf(m))
 }
 
 func (s *Service) createDraft(ctx context.Context, userID, databaseID uint, r Recipe) (*View, error) {
@@ -192,6 +193,9 @@ func (s *Service) createDraft(ctx context.Context, userID, databaseID uint, r Re
 		SQLDown:            r.SQLDown,
 		Irreversible:       r.Irreversible,
 		IrreversibleReason: r.IrreversibleReason,
+		Mode:               r.Mode,
+		BatchTable:         r.BatchTable,
+		BatchColumn:        r.BatchColumn,
 		Status:             models.MigrationDraft,
 		Revision:           1,
 		CreatedByID:        &u.ID,
@@ -258,10 +262,10 @@ func (s *Service) requireDatabase(ctx context.Context, databaseID uint) error {
 
 // snapshot is a database's derived position as the views need it.
 type snapshot struct {
-	state   position.State
-	current int
-	next    uint
-	hasNext bool
+	state    position.State
+	versions map[uint]int
+	current  int
+	last     map[uint]LastExecution
 }
 
 func (s *Service) position(ctx context.Context, databaseID uint) (snapshot, error) {
@@ -269,8 +273,28 @@ func (s *Service) position(ctx context.Context, databaseID uint) (snapshot, erro
 	if err != nil {
 		return snapshot{}, err
 	}
-	next, ok := position.NextForward(st, versions)
-	return snapshot{state: st, current: position.ActiveVersion(st, versions), next: next, hasNext: ok}, nil
+	last, err := s.lastExecutions(ctx, databaseID)
+	if err != nil {
+		return snapshot{}, err
+	}
+	return snapshot{state: st, versions: versions, current: position.ActiveVersion(st, versions), last: last}, nil
+}
+
+func (s *Service) lastExecutions(ctx context.Context, databaseID uint) (map[uint]LastExecution, error) {
+	var rows []struct {
+		MigrationID uint
+		LastExecution
+	}
+	err := s.platform.WithContext(ctx).Raw(`SELECT DISTINCT ON (migration_id) migration_id, id, kind, status
+		FROM migration_executions WHERE database_id = ? ORDER BY migration_id, id DESC`, databaseID).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	last := make(map[uint]LastExecution, len(rows))
+	for _, r := range rows {
+		last[r.MigrationID] = r.LastExecution
+	}
+	return last, nil
 }
 
 func (s *Service) user(ctx context.Context, userID uint) (*models.User, error) {

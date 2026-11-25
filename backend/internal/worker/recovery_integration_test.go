@@ -90,10 +90,7 @@ func TestAnUncertainExecutionStaysUncertainWhileTheTargetCannotBeChecked(t *test
 
 	next := e.newExec(models.MigrationExecution{})
 	e.provider.down.Store(false)
-	e.mustProcess(next.ID)
-	if got := e.expectStatus(next.ID, models.ExecFailed); got.ErrorCode != "BLOCKED" {
-		t.Errorf("the next migration was not held back: %+v", got)
-	}
+	e.expectHeld(next.ID, x.ID)
 
 	e.makeDue(x.ID)
 	e.mustProcess(x.ID)
@@ -119,7 +116,9 @@ func TestAZombieThatCommitsAfterATakeoverCannotApplyTheSQLTwice(t *testing.T) {
 	if swept, err := e.w.Sweep(ctx); err != nil || swept.Dead != 1 {
 		t.Fatalf("sweep = %+v, %v", swept, err)
 	}
-	other := New(e.platform, e.provider, testConfig())
+	otherConfig := testConfig()
+	otherConfig.WorkerID = "other"
+	other := New(e.platform, e.provider, otherConfig)
 	claimedB, result, err := other.Claim(ctx, x.ID)
 	if err != nil || result != ClaimOK || claimedB.Lease.Token != claimedA.Lease.Token+1 {
 		t.Fatalf("takeover = %v, %v, token %d after %d", result, err, claimedB.Lease.Token, claimedA.Lease.Token)
@@ -192,15 +191,18 @@ func TestALostLockStopsTheRunWithoutWritingAnything(t *testing.T) {
 
 func TestAHeartbeatKeepsALongRunAlive(t *testing.T) {
 	cfg := testConfig()
-	cfg.HeartbeatEvery = 50 * time.Millisecond
-	cfg.LeaseTTL = 400 * time.Millisecond
+	cfg.HeartbeatEvery = 100 * time.Millisecond
+	cfg.LeaseTTL = 1500 * time.Millisecond
 	e := setupWith(t, cfg)
-	x := e.newExec(models.MigrationExecution{SQLExecuted: `UPDATE items SET qty = qty + 1 WHERE (SELECT pg_sleep(1.5)) IS NOT NULL`})
-	claimed, _, _ := e.w.Claim(context.Background(), x.ID)
+	x := e.newExec(models.MigrationExecution{SQLExecuted: `UPDATE items SET qty = qty + 1 WHERE (SELECT pg_sleep(4)) IS NOT NULL`})
+	claimed, result, err := e.w.Claim(context.Background(), x.ID)
+	if err != nil || result != ClaimOK {
+		t.Fatalf("claim = %v, %v", result, err)
+	}
 	done := make(chan error, 1)
 	go func() { done <- e.w.Run(context.Background(), claimed) }()
 
-	time.Sleep(1 * time.Second)
+	time.Sleep(3 * time.Second)
 	if !e.lockHeld(e.conn.ID) {
 		t.Error("the lease expired during a long run although the heartbeat was running")
 	}

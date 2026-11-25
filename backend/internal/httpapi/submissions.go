@@ -5,7 +5,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 	"github.com/AthillaZaidan/datanest/backend/internal/execution"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
@@ -36,12 +35,7 @@ func (h submissionHandlers) submit(c *gin.Context) {
 		RespondError(c, errInvalidBody)
 		return
 	}
-	if b.BatchSize != nil {
-		RespondError(c, apperr.ErrValidation.WithMessage("Mode per-batch belum dapat diajukan dari endpoint ini.").
-			WithDetails(map[string]string{"batchSize": "belum didukung"}))
-		return
-	}
-	e, err := h.migrations.Submit(c.Request.Context(), userID, id, b.Kind)
+	e, err := h.migrations.Submit(c.Request.Context(), userID, id, b.Kind, b.BatchSize)
 	if err != nil {
 		RespondError(c, err)
 		return

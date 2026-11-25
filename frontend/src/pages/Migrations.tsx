@@ -13,7 +13,9 @@ import { ago, formatTime } from '../utils/format'
 const filters: { key: '' | MigrationState; label: string }[] = [
   { key: '', label: 'Semua' },
   { key: 'draft', label: 'Draft' },
+  { key: 'review', label: 'Menunggu review' },
   { key: 'running', label: 'Berjalan' },
+  { key: 'partial', label: 'Sebagian' },
   { key: 'active', label: 'Aktif' },
   { key: 'inactive', label: 'Tidak aktif' },
   { key: 'failed', label: 'Gagal' },
@@ -22,8 +24,11 @@ const filters: { key: '' | MigrationState; label: string }[] = [
 function finding(migrations: Migration[], current: number) {
   const drafts = migrations.filter((m) => migrationState(m) === 'draft').length
   const waiting = drafts > 0 ? ` ${drafts} draft menunggu dijalankan.` : ''
-  const running = migrations.find((m) => m.status === 'running')
-  if (running) return `${running.version ? `v${running.version}` : 'Migration'} sedang berjalan.${waiting}`
+  const name = (m: Migration) => (m.version ? `v${m.version}` : 'Migration')
+  const partial = migrations.find((m) => migrationState(m) === 'partial')
+  if (partial) return `${name(partial)} berhenti sebagian dan perlu ditangani.${waiting}`
+  const running = migrations.find((m) => migrationState(m) === 'running')
+  if (running) return `${name(running)} sedang berjalan.${waiting}`
   return `${current ? `v${current} aktif` : 'Belum ada migration aktif'}.${waiting}`
 }
 
@@ -100,7 +105,7 @@ export default function Migrations() {
               {rows.map((m) => (
                 <li key={m.id} className="border-t border-rule first:border-t-0">
                   <Link to={`/migrations/${m.id}`} className="block py-3">
-                    <span className="flex items-center gap-2">
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className="font-mono text-[13px] font-medium">{m.version ? `v${m.version}` : 'draft'}</span>
                       <StatusBadge migration={m} />
                       <span className="ml-auto text-xs text-muted">{m.executedBy || m.createdBy}, {ago(m.finishedAt ?? m.updatedAt)}</span>
@@ -117,7 +122,7 @@ export default function Migrations() {
               <thead>
                 <tr>
                   <th className={`${ui.th} w-16`}>Versi</th>
-                  <th className={`${ui.th} w-24`}>Status</th>
+                  <th className={`${ui.th} w-36`}>Status</th>
                   <th className={ui.th}>SQL</th>
                   <th className={`${ui.th} w-32`}>Oleh</th>
                   <th className={`${ui.th} ${ui.num} w-44`}>Waktu</th>

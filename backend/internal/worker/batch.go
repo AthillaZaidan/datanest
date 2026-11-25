@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -17,13 +16,6 @@ import (
 )
 
 type span struct{ from, to string }
-
-func tableIdent(name string) pgx.Identifier {
-	if i := strings.Index(name, "."); i > 0 {
-		return pgx.Identifier{name[:i], name[i+1:]}
-	}
-	return pgx.Identifier{"public", name}
-}
 
 func totals(entries []migration.LedgerEntry) (int, int64) {
 	var rows int64
@@ -41,35 +33,13 @@ func parseBound(s string) (int64, error) {
 	return n, nil
 }
 
-func checkBatchColumn(ctx context.Context, db *sql.DB, table pgx.Identifier, column string) error {
-	var dataType string
-	var notNull, unique bool
-	err := db.QueryRowContext(ctx, `
-		SELECT format_type(a.atttypid, a.atttypmod), a.attnotnull,
-			EXISTS (
-				SELECT 1 FROM pg_index i
-				WHERE i.indrelid = a.attrelid AND i.indisunique AND i.indnatts = 1
-					AND i.indkey[0] = a.attnum AND i.indpred IS NULL
-			)
-		FROM pg_attribute a
-		WHERE a.attrelid = to_regclass($1) AND a.attname = $2 AND a.attnum > 0 AND NOT a.attisdropped`,
-		table.Sanitize(), column,
-	).Scan(&dataType, &notNull, &unique)
-	if errors.Is(err, sql.ErrNoRows) {
-		return permanent("BATCH_COLUMN_NOT_FOUND", "Kolom %s tidak ditemukan di tabel %s.", column, strings.Join(table, "."))
+func checkBatchColumn(ctx context.Context, db *sql.DB, table, column string) error {
+	err := migration.CheckBatchColumn(ctx, db, table, column)
+	var problem *migration.BatchColumnError
+	if errors.As(err, &problem) {
+		return permanent(problem.Code, "%s", problem.Message)
 	}
-	if err != nil {
-		return err
-	}
-	switch dataType {
-	case "smallint", "integer", "bigint":
-	default:
-		return permanent("BATCH_COLUMN_TYPE", "Kolom batch harus bertipe bilangan bulat (smallint, integer, bigint), bukan %s.", dataType)
-	}
-	if !notNull || !unique {
-		return permanent("BATCH_COLUMN_NOT_UNIQUE", "Kolom batch harus NOT NULL dan unik (primary key atau unique index tunggal).")
-	}
-	return nil
+	return err
 }
 
 func (w *Worker) chain(ctx context.Context, id uint) ([]uint, error) {
@@ -197,27 +167,21 @@ func (w *Worker) startCursor(ctx context.Context, db *sql.DB, e *models.Migratio
 	return min.Int64 - 1, true, nil
 }
 
-func (w *Worker) runBatches(ctx context.Context, db *sql.DB, cl *Claimed) (int, int64, error) {
+func (w *Worker) runBatches(ctx context.Context, db *sql.DB, cl *Claimed, own []migration.LedgerEntry) (int, int64, error) {
 	e := &cl.Exec
 	wctx := context.WithoutCancel(ctx)
+	batches, rows := totals(own)
 	if e.BatchSize == nil || *e.BatchSize < 1 {
-		return 0, 0, permanent("BATCH_SIZE_INVALID", "Ukuran batch harus lebih dari 0.")
+		return batches, rows, permanent("BATCH_SIZE_INVALID", "Ukuran batch harus lebih dari 0.")
 	}
 	size := *e.BatchSize
-	ident := tableIdent(e.BatchTable)
 	if e.BatchTable == "" || e.BatchColumn == "" {
-		return 0, 0, permanent("BATCH_CONFIG_MISSING", "Mode batch butuh tabel dan kolom batch.")
+		return batches, rows, permanent("BATCH_CONFIG_MISSING", "Mode batch butuh tabel dan kolom batch.")
 	}
-	if err := checkBatchColumn(ctx, db, ident, e.BatchColumn); err != nil {
-		return 0, 0, err
+	if err := checkBatchColumn(ctx, db, e.BatchTable, e.BatchColumn); err != nil {
+		return batches, rows, err
 	}
-	table, column := ident.Sanitize(), pgx.Identifier{e.BatchColumn}.Sanitize()
-
-	own, err := migration.LookupExecution(ctx, db, e.ID)
-	if err != nil {
-		return 0, 0, err
-	}
-	batches, rows := totals(own)
+	table, column := migration.BatchTable(e.BatchTable).Sanitize(), pgx.Identifier{e.BatchColumn}.Sanitize()
 
 	scope, hasScope, err := w.batchScope(ctx, db, cl, table, column)
 	if err != nil {
@@ -244,7 +208,7 @@ func (w *Worker) runBatches(ctx context.Context, db *sql.DB, cl *Claimed) (int, 
 			return batches, rows, nil
 		}
 		from, to := strconv.FormatInt(cursor, 10), strconv.FormatInt(upper.Int64, 10)
-		affected, err := w.applyTx(ctx, db, e, batches+1, &from, &to, e.SQLExecuted, cursor, upper.Int64)
+		affected, err := w.applyTx(ctx, db, cl, batches+1, &from, &to, e.SQLExecuted, cursor, upper.Int64)
 		if err != nil {
 			return batches, rows, err
 		}
@@ -255,21 +219,17 @@ func (w *Worker) runBatches(ctx context.Context, db *sql.DB, cl *Claimed) (int, 
 	}
 }
 
-func (w *Worker) runUndo(ctx context.Context, db *sql.DB, cl *Claimed) (int, int64, error) {
+func (w *Worker) runUndo(ctx context.Context, db *sql.DB, cl *Claimed, own []migration.LedgerEntry) (int, int64, error) {
 	e := &cl.Exec
 	wctx := context.WithoutCancel(ctx)
+	batches, rows := totals(own)
 	if e.RevertsExecutionID == nil {
-		return 0, 0, permanent("ROLLBACK_TARGET_MISSING", "Rollback per batch butuh eksekusi yang dibatalkan.")
+		return batches, rows, permanent("ROLLBACK_TARGET_MISSING", "Rollback per batch butuh eksekusi yang dibatalkan.")
 	}
 	applied, err := w.chainSpans(ctx, db, *e.RevertsExecutionID)
 	if err != nil {
-		return 0, 0, err
+		return batches, rows, err
 	}
-	own, err := migration.LookupExecution(ctx, db, e.ID)
-	if err != nil {
-		return 0, 0, err
-	}
-	batches, rows := totals(own)
 
 	undone := map[span]bool{}
 	for _, entry := range own {
@@ -304,7 +264,7 @@ func (w *Worker) runUndo(ctx context.Context, db *sql.DB, cl *Claimed) (int, int
 			return batches, rows, err
 		}
 		fromText, toText := s.from, s.to
-		affected, err := w.applyTx(ctx, db, e, batches+1, &fromText, &toText, e.SQLExecuted, from, to)
+		affected, err := w.applyTx(ctx, db, cl, batches+1, &fromText, &toText, e.SQLExecuted, from, to)
 		if err != nil {
 			return batches, rows, err
 		}
