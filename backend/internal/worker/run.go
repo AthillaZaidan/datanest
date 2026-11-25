@@ -112,10 +112,11 @@ func (w *Worker) revalidate(ctx context.Context, e *models.MigrationExecution) e
 	if w.Revalidate == nil {
 		return nil
 	}
-	if err := w.Revalidate(ctx, e); err != nil {
-		return permanent("REVALIDATION_FAILED", "%s", err.Error())
+	err := w.Revalidate(ctx, e)
+	if err == nil || unavailable(err) {
+		return err
 	}
-	return nil
+	return permanent("REVALIDATION_FAILED", "%s", err.Error())
 }
 
 func (w *Worker) startHeartbeat(ctx context.Context, cancel context.CancelCauseFunc, cl *Claimed) <-chan struct{} {
