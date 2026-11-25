@@ -332,6 +332,13 @@ func TestRunForcesStandardConformingStringsOn(t *testing.T) {
 		}
 	})
 	f.target.SetMaxIdleConns(0)
+	var before string
+	if err := f.target.QueryRow(`SELECT current_setting('standard_conforming_strings')`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if before != "off" {
+		t.Fatalf("a fresh session sees standard_conforming_strings = %q, want off", before)
+	}
 
 	id := f.recipe("CREATE TABLE seen AS SELECT current_setting('standard_conforming_strings') AS value", "DROP TABLE seen")
 	if run := f.do(id, models.ExecKindRun); run.Status != models.ExecSuccess {
