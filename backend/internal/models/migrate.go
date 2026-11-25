@@ -39,6 +39,9 @@ func Migrate(db *gorm.DB) error {
 	if err := backfillM1History(db); err != nil {
 		return err
 	}
+	if err := backfillRunSeq(db); err != nil {
+		return err
+	}
 	return db.Where(Role{Name: RolePlatformAdmin}).FirstOrCreate(&Role{}).Error
 }
 
@@ -83,4 +86,18 @@ func insertRunExecutions(db *gorm.DB, filter string, args ...any) error {
 			COALESCE(started_at, created_at), now(), started_at, finished_at
 		FROM migrations WHERE `+unrecordedRun+` AND (`+filter+`)
 		ORDER BY database_id, version`, args...).Error
+}
+
+func backfillRunSeq(db *gorm.DB) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		return tx.Exec(`UPDATE migration_executions e SET run_seq = n.seq
+			FROM (
+				SELECT x.id, COALESCE(
+						(SELECT MAX(r.run_seq) FROM migration_executions r WHERE r.database_id = x.database_id), 0)
+					+ ROW_NUMBER() OVER (PARTITION BY x.database_id ORDER BY COALESCE(x.started_at, x.created_at), x.id) AS seq
+				FROM migration_executions x
+				WHERE x.run_seq IS NULL
+					AND (x.started_at IS NOT NULL OR x.status IN ('running', 'success', 'failed', 'partial', 'uncertain'))
+			) n WHERE e.id = n.id`).Error
+	})
 }
