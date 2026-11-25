@@ -32,14 +32,12 @@ type Partial struct {
 // State is the active position of one database, derived from its executions in run
 // order and never stored separately:
 //   - a successful run or forward puts its migration on top of the active stack;
-//   - a successful rollback takes it off again;
+//   - a successful rollback of the top takes it off again;
 //   - anything else (failed, partial, pending, rejected...) leaves the active stack as it is.
 type State struct {
 	// Active is bottom-first; the last element is the top (the only one that may be rolled back).
 	Active []Applied
-	// Redo holds migrations that may be forwarded in version order: rolled back (or failed
-	// above one that was), and not discarded by a newer migration being applied (undo/redo:
-	// an applied run clears redo).
+	// Redo holds migrations that may be forwarded, lowest version first.
 	Redo  map[uint]bool
 	Retry uint
 	// Started holds every migration that has had a run or forward start; once it has a
