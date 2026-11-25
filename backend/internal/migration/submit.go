@@ -51,7 +51,7 @@ func (s *Service) Submit(ctx context.Context, userID, migrationID uint, kind mod
 		out = models.MigrationExecution{
 			MigrationID: m.ID, DatabaseID: m.DatabaseID,
 			Kind: plan.Kind, Status: models.ExecPendingReview, Mode: models.ExecModeNormal,
-			SQLExecuted: plan.SQL, RevertsExecutionID: plan.Reverts,
+			SQLExecuted: plan.SQL, RevertsExecutionID: plan.Reverts, ContinuesExecutionID: plan.Continues,
 			RequestedByID: &u.ID, RequestedByUsername: u.Username,
 		}
 		return tx.Create(&out).Error
