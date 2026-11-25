@@ -45,6 +45,14 @@ func TestCheckRejectsHiddenTransactionControl(t *testing.T) {
 		"SELECT 1 AS a$b$; COMMIT; SELECT 2 AS c$b$",
 		"-- x\rCOMMIT",
 		"SELECT 1 AS é$b$; COMMIT; SELECT 2 AS é$b$",
+		"SELECT E'a' -- c\n'\\''; COMMIT; SELECT 'x'",
+		"SELECT E'a'\r'\\''; COMMIT; SELECT 'x'",
+		"SELECT 1$$'$$; COMMIT; --'",
+		"SELECT $1$$'$$; COMMIT; --'",
+		"SELECT 1E'\\''; COMMIT; SELECT 'x'",
+		"SELECT $1E'\\''; COMMIT; SELECT 'x'",
+		"SELECT 1.5e3$$'$$; COMMIT; --'",
+		"SELECT $1$; COMMIT; $1$",
 	} {
 		if Check(sql) == nil {
 			t.Errorf("Check(%q) accepted transaction control", sql)
@@ -61,6 +69,13 @@ func TestCheckAllowsLikePostgreSQL(t *testing.T) {
 		"CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $body$ BEGIN COMMIT; END $body$",
 		"/* a /* COMMIT; */ */ SELECT 1",
 		"SELECT \"a;COMMIT\"",
+		"SELECT E'a' 'b; COMMIT'",
+		"SELECT E'a'\n'b\\'; COMMIT'",
+		"SELECT E'a' -- c\n'b\\'; COMMIT'; SELECT 1",
+		"SELECT E'a'\r'b\\'; COMMIT'; SELECT 1",
+		"SELECT 1 AS $a$; COMMIT; $a$",
+		"SELECT E'a' /* c */ \n'\\''; COMMIT; SELECT 'x'",
+		"SELECT E'a' 'b'; SELECT 1",
 	} {
 		if err := Check(sql); err != nil {
 			t.Errorf("Check(%q) = %v", sql, err)
@@ -71,6 +86,20 @@ func TestCheckAllowsLikePostgreSQL(t *testing.T) {
 func TestMaskLiteralsFollowsEscapeStrings(t *testing.T) {
 	got := MaskLiterals("SELECT E'\\'' , 'topsecret'")
 	if got != "SELECT E'?' , '?'" {
+		t.Errorf("MaskLiterals = %q", got)
+	}
+}
+
+func TestMaskLiteralsMasksAContinuedEscapeString(t *testing.T) {
+	got := MaskLiterals("SELECT E'a'\n'\\'secret' , 'x'")
+	if got != "SELECT E'?' , '?'" {
+		t.Errorf("MaskLiterals = %q", got)
+	}
+}
+
+func TestMaskLiteralsKeepsParametersAndMasksDollarQuotes(t *testing.T) {
+	got := MaskLiterals("SELECT $1$$secret$$, $$x$$ -- c")
+	if got != "SELECT $1'?', '?'  " {
 		t.Errorf("MaskLiterals = %q", got)
 	}
 }
