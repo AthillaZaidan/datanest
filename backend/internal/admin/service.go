@@ -142,8 +142,12 @@ func (s *Service) DeleteUser(ctx context.Context, a, id uint) error {
 	if e := s.require(ctx, a); e != nil {
 		return e
 	}
+	var led []uint
 	e := s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if e := keepAnAdmin(tx, id); e != nil {
+			return e
+		}
+		if e := tx.Model(&models.Group{}).Clauses(clause.Locking{Strength: "UPDATE"}).Where("leader_id = ?", id).Order("id").Pluck("id", &led).Error; e != nil {
 			return e
 		}
 		res := tx.Delete(&models.User{}, id)
@@ -158,8 +162,15 @@ func (s *Service) DeleteUser(ctx context.Context, a, id uint) error {
 	if e != nil {
 		return e
 	}
+	for _, gid := range led {
+		logLeaderCleared(ctx, a, gid)
+	}
 	s.sessions.RevokeAllForUser(id)
 	return nil
+}
+
+func logLeaderCleared(ctx context.Context, actor, groupID uint) {
+	slog.InfoContext(ctx, obs.EventLeaderChanged, obs.AttrActorID, actor, obs.AttrGroupID, groupID, obs.AttrLeader, nil)
 }
 func (s *Service) Role(ctx context.Context, a, id uint, role string, add bool) error {
 	if e := s.require(ctx, a); e != nil {
@@ -306,7 +317,7 @@ func (s *Service) Member(ctx context.Context, a, gid, uid uint, add bool) error 
 	if e := s.require(ctx, a); e != nil {
 		return e
 	}
-	changed := false
+	changed, leaderCleared := false, false
 	e := s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if e := exists(tx, &models.Group{}, gid); e != nil {
 			return e
@@ -321,11 +332,16 @@ func (s *Service) Member(ctx context.Context, a, gid, uid uint, add bool) error 
 			return res.Error
 		}
 		// A leader must be a member.
-		if e := tx.Model(&models.Group{}).Where("id = ? AND leader_id = ?", gid, uid).Update("leader_id", nil).Error; e != nil {
-			return e
+		res := tx.Model(&models.Group{}).Where("id = ? AND leader_id = ?", gid, uid).Update("leader_id", nil)
+		if res.Error != nil {
+			return res.Error
 		}
+		leaderCleared = res.RowsAffected > 0
 		return tx.Where("group_id = ? AND user_id = ?", gid, uid).Delete(&models.GroupMember{}).Error
 	})
+	if e == nil && leaderCleared {
+		logLeaderCleared(ctx, a, gid)
+	}
 	if e == nil && changed {
 		s.sessions.MarkNeedsRotation(uid)
 	}
@@ -371,7 +387,7 @@ func (s *Service) ClearLeader(ctx context.Context, a, gid uint) (GroupView, erro
 	if res.RowsAffected == 0 {
 		return GroupView{}, apperr.ErrNotFound
 	}
-	slog.InfoContext(ctx, obs.EventLeaderChanged, obs.AttrActorID, a, obs.AttrGroupID, gid, obs.AttrLeader, nil)
+	logLeaderCleared(ctx, a, gid)
 	return s.Group(ctx, a, gid)
 }
 
