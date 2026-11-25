@@ -24,12 +24,15 @@ type View struct {
 	DatabaseID uint `json:"databaseId"`
 	Version    *int `json:"version"`
 	// SQL is SQLUp under its Milestone 1 name, kept for older clients.
-	SQL                string     `json:"sql"`
-	SQLUp              string     `json:"sqlUp"`
-	SQLDown            string     `json:"sqlDown"`
-	Irreversible       bool       `json:"irreversible"`
-	IrreversibleReason string     `json:"irreversibleReason,omitempty"`
-	FrozenAt           *time.Time `json:"frozenAt"`
+	SQL                string               `json:"sql"`
+	SQLUp              string               `json:"sqlUp"`
+	SQLDown            string               `json:"sqlDown"`
+	Irreversible       bool                 `json:"irreversible"`
+	IrreversibleReason string               `json:"irreversibleReason,omitempty"`
+	Mode               models.ExecutionMode `json:"mode"`
+	BatchTable         string               `json:"batchTable"`
+	BatchColumn        string               `json:"batchColumn"`
+	FrozenAt           *time.Time           `json:"frozenAt"`
 	// Active and Forwardable come from the derived position (package position), the same
 	// source as the version rules, so the SPA never infers them from status or MAX(version).
 	Active       bool                   `json:"active"`
@@ -66,6 +69,9 @@ func toView(m *models.Migration, p snapshot) View {
 		SQLDown:            m.SQLDown,
 		Irreversible:       m.Irreversible,
 		IrreversibleReason: m.IrreversibleReason,
+		Mode:               m.Mode,
+		BatchTable:         m.BatchTable,
+		BatchColumn:        m.BatchColumn,
 		FrozenAt:           m.FrozenAt,
 		Active:             p.state.IsActive(m.ID),
 		Forwardable:        p.state.Partial == nil && position.Forwardable(p.state, p.versions, m.ID),
