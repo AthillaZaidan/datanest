@@ -68,6 +68,9 @@ func (w *Worker) execute(ctx context.Context, cl *Claimed) (batches int, rows in
 	own, err := migration.LookupExecution(ctx, db, e.ID)
 	if err != nil {
 		w.logRecoveryCheck(ctx, cl, "unreadable", 0, err)
+		if cl.From == models.ExecUncertain && classify(err) == kindPermanent {
+			err = fmt.Errorf("ledger: %v", err)
+		}
 		return e.CommittedBatches, e.CommittedRows, err
 	}
 	if len(own) > 0 {
