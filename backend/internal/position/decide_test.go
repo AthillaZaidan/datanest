@@ -3,6 +3,7 @@ package position
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
@@ -275,5 +276,41 @@ func TestActiveVersion(t *testing.T) {
 	}
 	if v := ActiveVersion(Derive([]Event{ev(1, 1, run, ok), undo(2, 1, 1, ok)}), versions); v != 0 {
 		t.Errorf("after rolling back the first migration = %d, want 0", v)
+	}
+}
+
+func TestABatchRecipeIsCompleteOnlyWithTheBatchContract(t *testing.T) {
+	const ok = "UPDATE t SET a = 1 WHERE id > $1 AND id <= $2"
+	batch := func(m models.Migration) *models.Migration {
+		m.ID, m.Mode, m.BatchTable, m.BatchColumn = 1, models.ExecModeBatch, "t", "id"
+		return &m
+	}
+	tests := []struct {
+		name    string
+		m       *models.Migration
+		invalid map[string]string
+	}{
+		{"both follow the contract", batch(models.Migration{SQL: ok, SQLDown: ok}), nil},
+		{"up without parameters", batch(models.Migration{SQL: "UPDATE t SET a = 1", SQLDown: ok}),
+			map[string]string{"sqlUp": "SQL per-batch harus memakai $1 (batas bawah, tidak termasuk) dan $2 (batas atas, termasuk)."}},
+		{"two statements in down", batch(models.Migration{SQL: ok, SQLDown: ok + "; " + ok}),
+			map[string]string{"sqlDown": "SQL per-batch harus tepat satu statement."}},
+		{"irreversible needs no down", batch(models.Migration{SQL: ok, Irreversible: true, IrreversibleReason: "data hilang"}), nil},
+		{"blank down keeps its own reason", batch(models.Migration{SQL: ok}),
+			map[string]string{"sqlDown": "wajib diisi, atau tandai migration irreversible beserta alasannya"}},
+		{"a normal recipe has no contract", &models.Migration{ID: 1, SQL: "SELECT 1", SQLDown: "SELECT 2"}, nil},
+	}
+	for _, tt := range tests {
+		_, err := Decide(Derive(nil), nil, tt.m, run)
+		if tt.invalid == nil {
+			if err != nil {
+				t.Errorf("%s: %v", tt.name, err)
+			}
+			continue
+		}
+		var e *apperr.Error
+		if !errors.As(err, &e) || !reflect.DeepEqual(e.Details, tt.invalid) {
+			t.Errorf("%s: err = %v, details %v, want %v", tt.name, err, e, tt.invalid)
+		}
 	}
 }
