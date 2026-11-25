@@ -440,6 +440,10 @@ func (s *Service) Grant(ctx context.Context, a, gid, did uint, level string, add
 		}
 		return nil
 	})
+	if e == nil {
+		slog.InfoContext(ctx, obs.EventGrantChanged, obs.AttrActorID, a, obs.AttrGroupID, gid, obs.AttrDatabaseID, did,
+			obs.AttrAction, map[bool]string{true: "set", false: "revoke"}[add], "level", level)
+	}
 	if e == nil && raised {
 		for _, u := range users {
 			s.sessions.MarkNeedsRotation(u)
