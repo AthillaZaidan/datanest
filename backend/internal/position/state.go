@@ -39,7 +39,7 @@ type State struct {
 	Active []Applied
 	// Redo holds migrations that may be forwarded in version order: rolled back (or failed
 	// above one that was), and not discarded by a newer migration being applied (undo/redo:
-	// a new run clears redo).
+	// an applied run clears redo).
 	Redo  map[uint]bool
 	Retry uint
 	// Started holds every migration that has had a run or forward start; once it has a
