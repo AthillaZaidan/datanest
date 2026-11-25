@@ -75,7 +75,7 @@ func (f *flow) recipe(up, down string) uint {
 // do submits, approves (standing in for the approval flow) and lets the worker run it.
 func (f *flow) do(migrationID uint, kind models.ExecutionKind) models.MigrationExecution {
 	f.t.Helper()
-	e, err := f.svc.Submit(f.ctx, f.editor.ID, migrationID, kind)
+	e, err := f.svc.Submit(f.ctx, f.editor.ID, migrationID, kind, nil)
 	if err != nil {
 		f.t.Fatalf("submit %s: %v", kind, err)
 	}
@@ -141,7 +141,7 @@ func TestRunRollbackForwardThroughTheWorker(t *testing.T) {
 	f := setupFlow(t)
 	a := f.recipe("CREATE TABLE a (id int)", "DROP TABLE a")
 
-	if _, err := f.svc.Submit(f.ctx, f.viewer.ID, a, models.ExecKindRun); errCode(err) != "FORBIDDEN" {
+	if _, err := f.svc.Submit(f.ctx, f.viewer.ID, a, models.ExecKindRun, nil); errCode(err) != "FORBIDDEN" {
 		t.Fatalf("viewer submit = %v", err)
 	}
 
@@ -162,7 +162,7 @@ func TestRunRollbackForwardThroughTheWorker(t *testing.T) {
 	if f.has("a") || f.current() != 0 {
 		t.Fatalf("after rollback: table %v, current %d", f.has("a"), f.current())
 	}
-	if _, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback); errCode(err) != "ROLLBACK_NOT_ALLOWED" {
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback, nil); errCode(err) != "ROLLBACK_NOT_ALLOWED" {
 		t.Errorf("second rollback = %v", err)
 	}
 
@@ -221,11 +221,11 @@ func TestPositionFollowsRunOrderNotRequestOrder(t *testing.T) {
 	f := setupFlow(t)
 	a := f.recipe("CREATE TABLE a (id int)", "DROP TABLE a")
 	b := f.recipe("CREATE TABLE b (id int)", "DROP TABLE b")
-	requestA, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun)
+	requestA, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestB, err := f.svc.Submit(f.ctx, f.editor.ID, b, models.ExecKindRun)
+	requestB, err := f.svc.Submit(f.ctx, f.editor.ID, b, models.ExecKindRun, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestPositionFollowsRunOrderNotRequestOrder(t *testing.T) {
 	if version(b) != 1 || version(a) != 2 || f.current() != 2 {
 		t.Fatalf("versions b=%d a=%d current=%d, want 1 2 2", version(b), version(a), f.current())
 	}
-	if _, err := f.svc.Submit(f.ctx, f.editor.ID, b, models.ExecKindRollback); errCode(err) != "ROLLBACK_NOT_ALLOWED" {
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, b, models.ExecKindRollback, nil); errCode(err) != "ROLLBACK_NOT_ALLOWED" {
 		t.Errorf("rollback of the migration that ran first = %v", err)
 	}
 
@@ -259,7 +259,7 @@ func TestPositionFollowsRunOrderNotRequestOrder(t *testing.T) {
 		t.Errorf("history = %+v, want b before a", history)
 	}
 
-	if _, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback); err != nil {
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback, nil); err != nil {
 		t.Errorf("rollback of the migration that ran last = %v", err)
 	}
 }
@@ -276,7 +276,7 @@ func TestFailedRunCanBeForwardedUntilANewRunDiscardsIt(t *testing.T) {
 	if f.current() != 0 {
 		t.Fatalf("failed run changed the position to %d", f.current())
 	}
-	if _, err := f.svc.Submit(f.ctx, f.editor.ID, bad, models.ExecKindRun); errCode(err) != "EXECUTION_STATE_CONFLICT" {
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, bad, models.ExecKindRun, nil); errCode(err) != "EXECUTION_STATE_CONFLICT" {
 		t.Errorf("second run = %v, want EXECUTION_STATE_CONFLICT", err)
 	}
 
@@ -291,7 +291,7 @@ func TestFailedRunCanBeForwardedUntilANewRunDiscardsIt(t *testing.T) {
 	if e := f.do(other, models.ExecKindRun); e.Status != models.ExecSuccess || f.current() != 2 {
 		t.Fatalf("new run = %s, current %d", e.Status, f.current())
 	}
-	if _, err := f.svc.Submit(f.ctx, f.editor.ID, bad, models.ExecKindForward); errCode(err) != "FORWARD_NOT_ALLOWED" {
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, bad, models.ExecKindForward, nil); errCode(err) != "FORWARD_NOT_ALLOWED" {
 		t.Errorf("forward after a new run = %v, want FORWARD_NOT_ALLOWED", err)
 	}
 	if _, err := f.svc.Duplicate(f.ctx, f.editor.ID, bad); err != nil {
@@ -320,7 +320,7 @@ func TestAFailedRunKeepsTheRolledBackMigrationForwardable(t *testing.T) {
 		if v.Active || !v.Forwardable {
 			t.Errorf("migration %d active %v forwardable %v, want only forwardable", id, v.Active, v.Forwardable)
 		}
-		e, err := f.svc.Submit(f.ctx, f.editor.ID, id, models.ExecKindForward)
+		e, err := f.svc.Submit(f.ctx, f.editor.ID, id, models.ExecKindForward, nil)
 		if err != nil {
 			t.Fatalf("forward of %d = %v", id, err)
 		}
@@ -331,7 +331,7 @@ func TestAFailedRunKeepsTheRolledBackMigrationForwardable(t *testing.T) {
 func TestARunThatFailedWithoutAVersionCanBeRunAgain(t *testing.T) {
 	f := setupFlow(t)
 	a := f.recipe("CREATE TABLE a (id int)", "DROP TABLE a")
-	first, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun)
+	first, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestARunThatFailedWithoutAVersionCanBeRunAgain(t *testing.T) {
 	if !v.Active || v.Forwardable {
 		t.Errorf("active %v forwardable %v, want only active", v.Active, v.Forwardable)
 	}
-	if _, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun); errCode(err) != "EXECUTION_STATE_CONFLICT" {
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun, nil); errCode(err) != "EXECUTION_STATE_CONFLICT" {
 		t.Errorf("third run = %v, want EXECUTION_STATE_CONFLICT", err)
 	}
 }
@@ -355,12 +355,12 @@ func TestARunThatFailedWithoutAVersionCanBeRunAgain(t *testing.T) {
 func TestRevalidateAcceptsARetryAfterARunThatNeverStarted(t *testing.T) {
 	f := setupFlow(t)
 	a := f.recipe("CREATE TABLE a (id int)", "DROP TABLE a")
-	first, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun)
+	first, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.setStatus(*first, models.ExecFailed)
-	second, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun)
+	second, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +400,7 @@ func TestAPartialExecutionIsContinuedOrUndone(t *testing.T) {
 	run := f.do(a, models.ExecKindRun)
 	f.setStatus(run, models.ExecPartial)
 	check("partial run", false, false)
-	if _, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun); errCode(err) != "EXECUTION_STATE_CONFLICT" {
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun, nil); errCode(err) != "EXECUTION_STATE_CONFLICT" {
 		t.Errorf("run of a partial run = %v, want EXECUTION_STATE_CONFLICT", err)
 	}
 
@@ -428,7 +428,7 @@ func TestAPartialExecutionIsContinuedOrUndone(t *testing.T) {
 	refersTo("undo reverts", undo.RevertsExecutionID, again.ID)
 	refersTo("undo continues", undo.ContinuesExecutionID, 0)
 	f.setStatus(undo, models.ExecPartial)
-	if _, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindForward); errCode(err) != "EXECUTION_STATE_CONFLICT" {
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindForward, nil); errCode(err) != "EXECUTION_STATE_CONFLICT" {
 		t.Errorf("forward of a partial rollback = %v, want EXECUTION_STATE_CONFLICT", err)
 	}
 
@@ -447,7 +447,7 @@ func TestRevalidateRefusesAChangedContinuation(t *testing.T) {
 	f := setupFlow(t)
 	a := f.recipe("CREATE TABLE IF NOT EXISTS a (id int)", "DROP TABLE IF EXISTS a")
 	f.setStatus(f.do(a, models.ExecKindRun), models.ExecPartial)
-	e, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindForward)
+	e, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindForward, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +464,7 @@ func TestRevalidateRefusesAChangedRollbackTarget(t *testing.T) {
 	f := setupFlow(t)
 	a := f.recipe("CREATE TABLE a (id int)", "DROP TABLE a")
 	f.do(a, models.ExecKindRun)
-	e, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback)
+	e, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,10 +497,10 @@ func TestRollbackOnlyTheTopAndNeverIrreversible(t *testing.T) {
 	}
 	f.do(drop.ID, models.ExecKindRun)
 
-	if _, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback); errCode(err) != "ROLLBACK_NOT_ALLOWED" {
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback, nil); errCode(err) != "ROLLBACK_NOT_ALLOWED" {
 		t.Errorf("rollback below the top = %v", err)
 	}
-	if _, err := f.svc.Submit(f.ctx, f.editor.ID, drop.ID, models.ExecKindRollback); errCode(err) != "ROLLBACK_NOT_ALLOWED" {
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, drop.ID, models.ExecKindRollback, nil); errCode(err) != "ROLLBACK_NOT_ALLOWED" {
 		t.Errorf("rollback of an irreversible migration = %v", err)
 	}
 }
@@ -512,7 +512,7 @@ func TestRevalidateFailsARequestThatBecameInvalid(t *testing.T) {
 	a := f.recipe("CREATE TABLE a (id int)", "DROP TABLE a")
 	f.do(a, models.ExecKindRun)
 
-	pending, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback)
+	pending, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -539,7 +539,7 @@ func TestRevalidateFailsARequestThatBecameInvalid(t *testing.T) {
 func TestRevalidateRefusesChangedSQL(t *testing.T) {
 	f := setupFlow(t)
 	a := f.recipe("CREATE TABLE a (id int)", "DROP TABLE a")
-	e, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun)
+	e, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -557,7 +557,7 @@ func TestRevalidateRefusesChangedSQL(t *testing.T) {
 func TestSubmitRefusesTransactionControlHiddenInAnEscapeString(t *testing.T) {
 	f := setupFlow(t)
 	id := f.recipe("CREATE TABLE leaked (id int); SELECT E'\\''; COMMIT; SELECT 1/0; --'", "DROP TABLE leaked")
-	if _, err := f.svc.Submit(f.ctx, f.editor.ID, id, models.ExecKindRun); errCode(err) != "TRANSACTION_CONTROL_NOT_ALLOWED" {
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, id, models.ExecKindRun, nil); errCode(err) != "TRANSACTION_CONTROL_NOT_ALLOWED" {
 		t.Fatalf("submit = %v", err)
 	}
 	if f.has("leaked") {
@@ -650,7 +650,7 @@ func TestExecutionsRecordTheVersionAndRevisionOfTheirMigration(t *testing.T) {
 		}
 	}
 
-	requested, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun)
+	requested, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -679,7 +679,7 @@ func TestExecutionsRecordTheVersionAndRevisionOfTheirMigration(t *testing.T) {
 			t.Errorf("%s has version %v revision %d, want 1 and 3", name, e.Version, e.Revision)
 		}
 	}
-	queued, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback)
+	queued, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -747,7 +747,7 @@ func TestViewShowsTheLastExecutionWhateverItsStatus(t *testing.T) {
 		t.Fatalf("draft has last execution %+v", got)
 	}
 
-	first, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun)
+	first, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -763,7 +763,7 @@ func TestViewShowsTheLastExecutionWhateverItsStatus(t *testing.T) {
 	f.setStatus(*first, models.ExecRejected)
 	want("rejected", models.ExecRejected, first.ID, models.ExecKindRun)
 
-	second, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun)
+	second, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -863,7 +863,7 @@ func TestListReadsLastExecutionsWithoutAQueryPerMigration(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		id := f.recipe("SELECT 1", "SELECT 1")
-		if _, err := f.svc.Submit(f.ctx, f.editor.ID, id, models.ExecKindRun); err != nil {
+		if _, err := f.svc.Submit(f.ctx, f.editor.ID, id, models.ExecKindRun, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

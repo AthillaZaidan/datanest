@@ -111,7 +111,7 @@ func (e migEnv) draft(t *testing.T, sql string) migration.View {
 func (e migEnv) run(t *testing.T, id uint) models.MigrationExecution {
 	t.Helper()
 	ctx := context.Background()
-	submitted, err := e.svc.Submit(ctx, e.editor.ID, id, models.ExecKindRun)
+	submitted, err := e.svc.Submit(ctx, e.editor.ID, id, models.ExecKindRun, nil)
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
