@@ -2,6 +2,7 @@ package position
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
@@ -26,6 +27,9 @@ func Decide(st State, versions map[uint]int, m *models.Migration, kind models.Ex
 	case models.ExecKindRun:
 		if st.Started[m.ID] {
 			return Plan{}, apperr.ErrExecutionStateConflict.WithMessage("Migration ini sudah pernah dijalankan. Gunakan forward untuk menjalankannya lagi.")
+		}
+		if err := complete(m); err != nil {
+			return Plan{}, err
 		}
 		return Plan{Kind: kind, SQL: m.SQL}, nil
 
@@ -52,10 +56,31 @@ func Decide(st State, versions map[uint]int, m *models.Migration, kind models.Ex
 			}
 			return Plan{}, apperr.ErrRollbackNotAllowed.WithMessage(msg)
 		}
+		if strings.TrimSpace(m.SQLDown) == "" {
+			return Plan{}, apperr.ErrRollbackNotAllowed.WithMessage("Migration ini tidak punya SQL down.")
+		}
 		reverts := top.ExecutionID
 		return Plan{Kind: kind, SQL: m.SQLDown, Reverts: &reverts}, nil
 	}
 	return Plan{}, apperr.ErrValidation.WithDetails(map[string]string{"kind": "harus run, forward, atau rollback"})
+}
+
+// complete checks that a recipe may be run: up SQL, plus down SQL or a reason it is irreversible.
+func complete(m *models.Migration) error {
+	details := map[string]string{}
+	if strings.TrimSpace(m.SQL) == "" {
+		details["sqlUp"] = "wajib diisi"
+	}
+	if m.Irreversible && strings.TrimSpace(m.IrreversibleReason) == "" {
+		details["irreversibleReason"] = "wajib diisi untuk migration irreversible"
+	}
+	if !m.Irreversible && strings.TrimSpace(m.SQLDown) == "" {
+		details["sqlDown"] = "wajib diisi, atau tandai migration irreversible beserta alasannya"
+	}
+	if len(details) > 0 {
+		return apperr.ErrValidation.WithMessage("Migration belum lengkap.").WithDetails(details)
+	}
+	return nil
 }
 
 // NextForward is the migration a forward may run: the lowest version in the redo history.
