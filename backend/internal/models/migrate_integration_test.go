@@ -185,3 +185,56 @@ func TestMigrateNumbersStartedExecutionsInStartOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestMigrateBackfillsTheVersionAndRevisionOfExecutions(t *testing.T) {
+	db := testutil.PlatformDB(t)
+	conn := testutil.CreateDatabaseConnection(t, db, "toko")
+	version := 4
+	m := models.Migration{DatabaseID: conn.ID, SQL: "SELECT 1", Status: models.MigrationSuccess, Version: &version, Revision: 3}
+	if err := db.Create(&m).Error; err != nil {
+		t.Fatal(err)
+	}
+	unversioned := models.Migration{DatabaseID: conn.ID, SQL: "SELECT 2", Status: models.MigrationDraft, Revision: 2}
+	if err := db.Create(&unversioned).Error; err != nil {
+		t.Fatal(err)
+	}
+	create := func(migrationID uint, status models.ExecutionStatus) models.MigrationExecution {
+		return testutil.CreateExecution(t, db, models.MigrationExecution{MigrationID: migrationID, DatabaseID: conn.ID, Status: status})
+	}
+	started := create(m.ID, models.ExecSuccess)
+	waiting := create(m.ID, models.ExecPendingReview)
+	draftRequest := create(unversioned.ID, models.ExecPendingReview)
+	own := create(m.ID, models.ExecSuccess)
+	ownVersion, ownRevision := 9, 8
+	if err := db.Model(&own).Updates(map[string]any{"version": ownVersion, "revision": ownRevision}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := models.Migrate(db); err != nil {
+			t.Fatalf("Migrate #%d: %v", i+1, err)
+		}
+		get := func(id uint) models.MigrationExecution {
+			var e models.MigrationExecution
+			if err := db.First(&e, id).Error; err != nil {
+				t.Fatal(err)
+			}
+			return e
+		}
+		check := func(name string, id uint, wantVersion, wantRevision int) {
+			t.Helper()
+			e := get(id)
+			gotVersion := 0
+			if e.Version != nil {
+				gotVersion = *e.Version
+			}
+			if gotVersion != wantVersion || e.Revision != wantRevision {
+				t.Errorf("Migrate #%d: %s has version %d revision %d, want %d %d (0 means no version)", i+1, name, gotVersion, e.Revision, wantVersion, wantRevision)
+			}
+		}
+		check("started execution", started.ID, version, 3)
+		check("waiting execution", waiting.ID, 0, 3)
+		check("request of a draft", draftRequest.ID, 0, 2)
+		check("execution with its own values", own.ID, ownVersion, ownRevision)
+	}
+}
