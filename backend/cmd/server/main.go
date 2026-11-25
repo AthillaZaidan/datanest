@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -49,6 +50,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if os.Getenv(gin.EnvGinMode) == "" {
+		gin.SetMode(gin.ReleaseMode)
+	}
 	shutdownObs, err := obs.Setup(cfg.LogLevel, cfg.TraceExporter, os.Stdout, os.Stderr)
 	if err != nil {
 		return err
@@ -56,7 +60,7 @@ func run() error {
 	defer shutdownObs(context.Background())
 
 	db, err := gorm.Open(postgres.Open(cfg.PlatformDSN), &gorm.Config{
-		Logger: logger.New(log.New(os.Stderr, "", log.LstdFlags), logger.Config{
+		Logger: logger.New(log.Default(), logger.Config{
 			SlowThreshold:             200 * time.Millisecond,
 			LogLevel:                  logger.Warn,
 			IgnoreRecordNotFoundError: true,
