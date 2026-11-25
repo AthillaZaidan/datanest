@@ -2,6 +2,7 @@ package position
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
@@ -22,6 +23,14 @@ func message(err error) string {
 		return e.Message
 	}
 	return ""
+}
+
+func describe(p Plan) string {
+	return describePlan(p.Kind, p.SQL, idOf(p.Reverts), idOf(p.Continues))
+}
+
+func describePlan(kind models.ExecutionKind, sql string, reverts, continues uint) string {
+	return fmt.Sprintf("%s %q reverts %d continues %d", kind, sql, reverts, continues)
 }
 
 func TestDecide(t *testing.T) {
@@ -63,6 +72,27 @@ func TestDecide(t *testing.T) {
 			Derive([]Event{ev(1, a, run, ok), ev(2, b, run, failed), undo(3, a, 1, ok)}), mig(a), forward, "", "up", 0},
 		{"forward a failed run above a rolled back migration is refused",
 			Derive([]Event{ev(1, a, run, ok), ev(2, b, run, failed), undo(3, a, 1, ok)}), mig(b), forward, "FORWARD_NOT_ALLOWED", "", 0},
+		{"forward an earlier failed run",
+			Derive([]Event{ev(1, a, run, ok), ev(2, b, run, failed), ev(3, c, run, failed)}), mig(b), forward, "", "up", 0},
+		{"forward the latest failed run",
+			Derive([]Event{ev(1, a, run, ok), ev(2, b, run, failed), ev(3, c, run, failed)}), mig(c), forward, "", "up", 0},
+		{"forward an earlier failed run after the latest was forwarded is refused",
+			Derive([]Event{ev(1, a, run, ok), ev(2, b, run, failed), ev(3, c, run, failed), ev(4, c, forward, ok)}),
+			mig(b), forward, "FORWARD_NOT_ALLOWED", "", 0},
+		{"forward a rolled back migration after its partial forward was undone",
+			Derive([]Event{ev(1, a, run, ok), undo(2, a, 1, ok), ev(3, b, run, failed), ev(4, a, forward, partial), undo(5, a, 4, ok)}),
+			mig(a), forward, "", "up", 0},
+		{"forward a failed run after the partial forward of another was undone",
+			Derive([]Event{ev(1, a, run, ok), undo(2, a, 1, ok), ev(3, b, run, failed), ev(4, a, forward, partial), undo(5, a, 4, ok)}),
+			mig(b), forward, "", "up", 0},
+		{"forward of a partial run that was replaced is refused",
+			Derive([]Event{ev(1, a, run, partial), ev(2, b, run, ok)}), mig(a), forward, "FORWARD_NOT_ALLOWED", "", 0},
+		{"rollback of a partial run that was replaced is refused",
+			Derive([]Event{ev(1, a, run, partial), ev(2, b, run, ok)}), mig(a), rollback, "ROLLBACK_NOT_ALLOWED", "", 0},
+		{"run of a partial run that was replaced is refused",
+			Derive([]Event{ev(1, a, run, partial), ev(2, b, run, ok)}), mig(a), run, "EXECUTION_STATE_CONFLICT", "", 0},
+		{"rollback of the run that replaced a partial one",
+			Derive([]Event{ev(1, a, run, partial), ev(2, b, run, ok)}), mig(b), rollback, "", "down", 2},
 		{"forward skips nothing: lowest version first",
 			Derive([]Event{ev(1, a, run, ok), ev(2, b, run, ok), ev(3, c, run, ok), undo(4, c, 3, ok), undo(5, b, 2, ok)}),
 			mig(c), forward, "FORWARD_NOT_ALLOWED", "", 0},
@@ -92,11 +122,8 @@ func TestDecide(t *testing.T) {
 			if err != nil {
 				return
 			}
-			if p.Kind != tt.kind || p.SQL != tt.wantSQL {
-				t.Errorf("plan = %+v, want kind %s sql %q", p, tt.kind, tt.wantSQL)
-			}
-			if (p.Reverts == nil) != (tt.reverts == 0) || (p.Reverts != nil && *p.Reverts != tt.reverts) {
-				t.Errorf("reverts = %v, want %d", p.Reverts, tt.reverts)
+			if got, want := describe(p), describePlan(tt.kind, tt.wantSQL, tt.reverts, 0); got != want {
+				t.Errorf("plan = %s, want %s", got, want)
 			}
 		})
 	}
@@ -162,9 +189,6 @@ func TestDecideWhileAnExecutionIsPartial(t *testing.T) {
 		{"rollback of another migration is refused", partialRun, mig(a), rollback, "EXECUTION_STATE_CONFLICT", otherByTwo, "", 0, 0},
 		{"unknown kind on another migration", partialRun, mig(a), "drop", "VALIDATION_ERROR", "", "", 0, 0},
 	}
-	same := func(got *uint, want uint) bool {
-		return (got == nil) == (want == 0) && (got == nil || *got == want)
-	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p, err := Decide(tt.state, versions, tt.m, tt.kind)
@@ -177,8 +201,8 @@ func TestDecideWhileAnExecutionIsPartial(t *testing.T) {
 				}
 				return
 			}
-			if p.Kind != tt.kind || p.SQL != tt.wantSQL || !same(p.Reverts, tt.reverts) || !same(p.Continues, tt.continues) {
-				t.Errorf("plan = %+v, want kind %s sql %q reverts %d continues %d", p, tt.kind, tt.wantSQL, tt.reverts, tt.continues)
+			if got, want := describe(p), describePlan(tt.kind, tt.wantSQL, tt.reverts, tt.continues); got != want {
+				t.Errorf("plan = %s, want %s", got, want)
 			}
 		})
 	}
