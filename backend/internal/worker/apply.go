@@ -28,7 +28,7 @@ func sqlState(err error) string {
 }
 
 func (w *Worker) limits() []string {
-	var out []string
+	out := []string{"SET LOCAL standard_conforming_strings = on"}
 	if w.cfg.LockTimeout > 0 {
 		out = append(out, fmt.Sprintf("SET LOCAL lock_timeout = %d", w.cfg.LockTimeout.Milliseconds()))
 	}
