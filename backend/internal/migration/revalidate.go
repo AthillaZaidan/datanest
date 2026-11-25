@@ -12,7 +12,10 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/position"
 )
 
-var errSQLChanged = errors.New("SQL eksekusi tidak lagi sama dengan migration yang disetujui")
+var (
+	errSQLChanged       = errors.New("SQL eksekusi tidak lagi sama dengan migration yang disetujui")
+	errReferenceChanged = errors.New("Eksekusi yang dibatalkan atau dilanjutkan sudah berubah sejak permintaan ini disetujui.")
+)
 
 // Revalidate re-checks an execution once the worker holds the database lock (design D3)
 // and, on the first attempt that starts, assigns the migration its version and freezes
@@ -36,8 +39,11 @@ func (s *Service) Revalidate(ctx context.Context, e *models.MigrationExecution) 
 			}
 			return err
 		}
-		if plan.SQL != e.SQLExecuted || !sameID(plan.Reverts, e.RevertsExecutionID) || !sameID(plan.Continues, e.ContinuesExecutionID) {
+		if plan.SQL != e.SQLExecuted {
 			return errSQLChanged
+		}
+		if !sameID(plan.Reverts, e.RevertsExecutionID) || !sameID(plan.Continues, e.ContinuesExecutionID) {
+			return errReferenceChanged
 		}
 		if m.Version == nil {
 			err := tx.Exec(`UPDATE migrations SET version = (SELECT COALESCE(MAX(version), 0) + 1 FROM migrations WHERE database_id = ?)
