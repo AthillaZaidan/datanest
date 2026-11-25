@@ -116,7 +116,9 @@ func TestAZombieThatCommitsAfterATakeoverCannotApplyTheSQLTwice(t *testing.T) {
 	if swept, err := e.w.Sweep(ctx); err != nil || swept.Dead != 1 {
 		t.Fatalf("sweep = %+v, %v", swept, err)
 	}
-	other := New(e.platform, e.provider, testConfig())
+	otherConfig := testConfig()
+	otherConfig.WorkerID = "other"
+	other := New(e.platform, e.provider, otherConfig)
 	claimedB, result, err := other.Claim(ctx, x.ID)
 	if err != nil || result != ClaimOK || claimedB.Lease.Token != claimedA.Lease.Token+1 {
 		t.Fatalf("takeover = %v, %v, token %d after %d", result, err, claimedB.Lease.Token, claimedA.Lease.Token)
