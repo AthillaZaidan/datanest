@@ -6,7 +6,7 @@ const MAX_STEPS = 16
 const dot = (m: Migration, current: number) => {
   const s = migrationState(m)
   if (s === 'failed') return 'size-2.5 border-2 border-negative bg-sheet'
-  if (s === 'running') return 'size-2.5 border-2 border-warning bg-sheet'
+  if (s === 'running' || s === 'partial') return 'size-2.5 border-2 border-warning bg-sheet'
   if (s === 'active') return m.version === current ? 'size-3 bg-accent' : 'size-2.5 bg-[#8d9398]'
   return 'size-2.5 border-2 border-[#8d9398] bg-sheet'
 }
@@ -14,7 +14,8 @@ const dot = (m: Migration, current: number) => {
 const describe = (m: Migration, current: number) => {
   const s = migrationState(m)
   if (s === 'active') return m.version === current ? 'versi saat ini' : 'aktif'
-  return s === 'failed' ? 'gagal' : s === 'running' ? 'berjalan' : 'tidak aktif'
+  const names: Partial<Record<typeof s, string>> = { failed: 'gagal', running: 'berjalan', partial: 'sebagian', review: 'menunggu review' }
+  return names[s] ?? 'tidak aktif'
 }
 
 // The schema's history as one line of executed versions; the current version is the one mark in the data hue,
