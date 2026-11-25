@@ -3,6 +3,7 @@ package obs
 
 const (
 	EventHTTPRequest        = "http.request"
+	EventHTTPPanic          = "http.panic"
 	EventAuthLogin          = "auth.login"
 	EventAuthzDenied        = "authz.denied"
 	EventExplorerQuery      = "explorer.query"
