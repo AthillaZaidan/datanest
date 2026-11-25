@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,6 +27,7 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/httpapi"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 	"github.com/AthillaZaidan/datanest/backend/internal/queue"
 	"github.com/AthillaZaidan/datanest/backend/internal/session"
 )
@@ -47,6 +49,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	shutdownObs, err := obs.Setup(cfg.LogLevel, cfg.TraceExporter, os.Stdout, os.Stderr)
+	if err != nil {
+		return err
+	}
+	defer shutdownObs(context.Background())
 
 	db, err := gorm.Open(postgres.Open(cfg.PlatformDSN), &gorm.Config{
 		Logger: logger.New(log.New(os.Stderr, "", log.LstdFlags), logger.Config{
@@ -82,7 +89,7 @@ func run() error {
 	migrationService := migration.New(db, pools, az, migration.Options{LockTimeout: cfg.Target.MigrationLockTimeout, StatementTimeout: cfg.Target.MigrationStatementTimeout, ExecTimeout: cfg.Target.MigrationExecTimeout})
 	// An unreachable target leaves its migration running for the next start; it must not keep the platform down.
 	if err := migrationService.Reconcile(context.Background()); err != nil {
-		log.Printf("reconcile: %v", err)
+		slog.Warn("reconcile.failed", obs.AttrError, err)
 	}
 	approvals := approval.NewService(db, az)
 	if cfg.AMQPURL != "" {
@@ -104,7 +111,7 @@ func run() error {
 
 	errc := make(chan error, 1)
 	go func() {
-		log.Printf("listening on %s", srv.Addr)
+		slog.Info("server.listening", "addr", srv.Addr)
 		errc <- srv.ListenAndServe()
 	}()
 
