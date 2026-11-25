@@ -124,10 +124,13 @@ Alur demo singkat:
    up.sql `UPDATE pesanan SET total = total + 1 WHERE id > $1 AND id <= $2`, down.sql yang mengurangi 1, dan ajukan dengan ukuran batch 2000.
    Halaman eksekusi menampilkan batch dan row yang sudah committed selama berjalan. Matikan worker di tengah jalan (Ctrl+C atau
    `kill -9`) lalu nyalakan lagi: job dilanjutkan dari batch berikutnya.
-6. Untuk melihat **partial**: tambahkan ke up.sql pembagian yang gagal mulai id tertentu, misalnya
-   `SET total = total + 1 / (CASE WHEN id > 100000 THEN 0 ELSE 1 END)`. Batch sebelum id itu tetap committed dan statusnya
-   **Sebagian**. Dari halaman migration, **Batalkan batch** menjalankan SQL down dalam urutan batch terbalik, dan **Lanjutkan**
-   meneruskan dari checkpoint terakhir. Selama partial, migration lain di database itu ditahan di antrean.
+6. Untuk melihat **partial**: tambahkan `CREATE TABLE saklar (nyala boolean NOT NULL); INSERT INTO saklar VALUES (true);` pada migration
+   pembuat table, dan pakai up.sql per-batch
+   `UPDATE pesanan SET total = total + 1 / (CASE WHEN id > 100000 AND (SELECT nyala FROM saklar) THEN 0 ELSE 1 END) WHERE id > $1 AND id <= $2`.
+   Batch sampai id 100000 tetap committed dan statusnya **Sebagian**; migration lain di database itu ditahan di antrean. Dari halaman
+   migration, **Batalkan batch** menjalankan SQL down dalam urutan batch terbalik. Untuk **Lanjutkan**, perbaiki dulu penyebabnya
+   (`docker compose exec target-pg psql -U postgres -d toko -c "UPDATE saklar SET nyala = false"`); sisanya diteruskan dari checkpoint
+   terakhir.
 7. Masuk sebagai `demo-admin`: buka **Groups** untuk mengatur anggota, leader, dan grant, **Koneksi database** untuk menambah atau menguji koneksi. Membuka `toko` ditolak sampai `demo-admin` dimasukkan ke group yang punya grant.
 
 ## Isi file .env
@@ -585,16 +588,17 @@ Setiap eksekusi migration (termasuk rollback dan forward) adalah satu baris `mig
 worker terpisah (`cmd/worker`) lewat antrean RabbitMQ. Alurnya:
 
 1. Baris execution berstatus `queued` di database platform. **Database adalah sumber kebenaran**; RabbitMQ hanya bel pintu.
-2. Sweeper (jalan di worker, tiap `WORKER_SWEEP_INTERVAL`) menerbitkan pesan berisi `execution_id`, `traceparent`, dan
-   `correlation_id` untuk execution `queued` yang belum diterbitkan. Pesan yang hilang atau ganda tidak merusak data, karena
+2. Server menerbitkan pesan berisi `execution_id`, `traceparent`, dan `correlation_id` begitu persetujuan terakhir masuk. Sweeper
+   (jalan di worker, tiap `WORKER_SWEEP_INTERVAL`) menerbitkan execution `queued` yang belum terbit atau belum diklaim. Pesan yang hilang atau ganda tidak merusak data, karena
    baris di database yang menentukan.
-3. Worker mengambil pesan, **mengambil lock database**, lalu **mengklaim** execution (`queued` atau `uncertain` menjadi `running`)
-   dengan satu `UPDATE ... WHERE status = ...`. Klaim yang menghasilkan 0 baris berarti pesan duplikat: di-ack dan dibuang.
+3. Worker mengambil pesan, **mengambil lock database**, memeriksa apakah execution itu harus **ditahan**, lalu **mengklaimnya**
+   (`queued` atau `uncertain` menjadi `running`) dengan satu `UPDATE ... WHERE status = ...` yang juga mensyaratkan lock itu masih
+   miliknya. Klaim yang menghasilkan 0 baris berarti pesan duplikat: di-ack dan dibuang.
 4. Pesan **di-ack setelah klaim berhasil**, bukan setelah job selesai: migration besar bisa lebih lama dari batas waktu ack
    RabbitMQ, dan pemulihan worker yang mati ditangani database lewat lease. Akibatnya prefetch tidak lagi membatasi jumlah job
    yang berjalan, sehingga worker membatasi sendiri lewat `WORKER_CONCURRENCY` slot yang diambil sebelum klaim.
-5. Worker menjalankan SQL di database target dalam satu transaction bersama baris **ledger**, lalu menulis hasil
-   (`success`, `failed`, `partial`, atau `uncertain`) dan melepas lock. Hasil dan progress dibaca SPA lewat polling
+5. Worker membaca **ledger** lebih dulu, menjalankan revalidasi, lalu menjalankan SQL di database target dalam satu transaction
+   bersama baris ledgernya, menulis hasil (`success`, `failed`, `partial`, atau `uncertain`), dan melepas lock. Hasil dan progress dibaca SPA lewat polling
    `GET /api/executions/:id` (10 detik saat `pending_review`, 2 detik saat status lain yang belum final).
 
 **Lock per database dan pemulihannya.** Table `database_locks` punya satu baris per database: pemegang (`owner`), execution,
@@ -606,8 +610,13 @@ setelah hasil ditulis; melepas hanya mengakhiri sewa, barisnya dipertahankan aga
   hidup, menandainya `uncertain`, dan menerbitkan pesan pemulihan. Worker lain mengambil lock (token naik) dan memeriksa ledger.
 - **Zombie:** worker yang hanya macet lalu bangun mendapat 0 baris saat memperpanjang sewa, langsung berhenti, dan tidak menulis
   apa pun. Semua penulisan hasil bersyarat pada status `running` dan pemilik klaim, jadi zombie tidak dapat menimpa hasil.
-  Pagar terakhirnya ledger: bila zombie dan worker pengganti sama-sama commit batch yang sama, primary key ledger membatalkan
-  satu transaction beserta perubahan datanya; yang kalah menganggap hasilnya "tidak pasti" lalu diperiksa lewat ledger.
+  Pagar terakhirnya ledger. Di setiap transaction, baris ledger ditulis **lebih dulu**, lalu worker memeriksa bahwa klaimnya masih
+  berlaku, baru SQL dijalankan. Karena itu worker pengganti menunggu baris ledger milik zombie sebelum menjalankan apa pun: bila zombie
+  commit, pengganti mendapat bentrok primary key dan memulihkan lewat ledger; bila zombie batal, pengganti yang menjalankan. Zombie yang
+  baru sampai ke pemeriksaan klaim setelah diambil alih berhenti tanpa menjalankan SQL.
+- **Tidak ada vonis selama zombie masih mungkin commit:** sebelum menetapkan gagal tanpa menjalankan SQL (batas percobaan habis atau
+  revalidasi menolak), worker pemulihan mencoba menulis baris ledger berikutnya lalu membatalkannya. Bila tertahan atau bentrok, status
+  tetap `uncertain` dan diperiksa lagi 30 detik kemudian.
 - Satu sumber lease: sweeper hanya memeriksa `database_locks`, execution tidak punya `lease_until` sendiri.
 
 **Ledger idempotency.** Table `_platform_executions` di setiap database target (disembunyikan dari explorer) dengan primary key
@@ -619,45 +628,56 @@ hasilnya ditulis tanpa menjalankan SQL lagi.
 tidak diketahui apakah data ter-commit. Execution menjadi `uncertain` dan **tidak** di-retry atau di-fail begitu saja:
 pemulihan membaca ledger (ada baris berarti selesai, tidak ada berarti dijalankan sebagai percobaan berikutnya). Bila target tidak
 dapat dihubungi, status tetap `uncertain` dan dicoba lagi tiap 30 detik; tidak ada tombol "paksa selesai".
-Selama ada execution `running`, `partial`, atau `uncertain` di sebuah database, migration berikutnya di database itu **ditahan**
-(menjadi `failed` dengan alasan `BLOCKED`).
+
+**Penahanan (spek).** Selama ada execution `running`, `uncertain`, atau `partial` di sebuah database, atau execution yang menunggu
+percobaan ulang, migration berikutnya di database itu **ditahan**: tetap `queued`, tidak memakai percobaan, diberi kode `HELD` beserta
+execution yang menahannya, dan dicoba lagi tiap 10 detik sampai penahannya selesai. Karena yang menunggu retry tidak bisa disalip,
+urutan versi sama dengan urutan commit.
 
 **Retry.** Hanya kegagalan yang pasti terjadi sebelum commit yang diulang (koneksi, `lock_timeout`, deadlock, serialization):
 maksimal `WORKER_MAX_ATTEMPTS` (3) percobaan, jeda 5 lalu 15 detik ditambah jitter, dipegang database lewat `not_before` dan
-sweeper. Error SQL (syntax, constraint, pembagian nol) langsung `failed`. Tiap percobaan adalah satu baris `execution_attempts`
-(append-only) dengan status, SQLSTATE, dan SQL yang dijalankan.
+sweeper. Error SQL (syntax, constraint, pembagian nol) langsung `failed`. Pemulihan setelah worker mati juga dibatasi: sebuah execution
+memulai SQL paling banyak `WORKER_MAX_ATTEMPTS` kali, setelah itu berakhir `RETRY_EXHAUSTED` (`failed`, atau `partial` bila ada batch
+yang sudah commit). Bukti commit di ledger selalu menang atas batas ini. Tiap percobaan adalah satu baris `execution_attempts`
+dengan status, SQLSTATE, dan SQL yang dijalankan.
 
 **Mode per-batch.** SQL ditulis user sebagai satu statement dengan `$1` (batas bawah, tidak termasuk) dan `$2` (batas atas,
 termasuk), mis. `UPDATE orders SET status = 'x' WHERE id > $1 AND id <= $2`. Kolom batch harus bertipe `smallint`/`integer`/`bigint`,
-`NOT NULL`, dan unik (primary key atau unique index tunggal); nama tabel dan kolom divalidasi lewat katalog dan di-quote. Saat mulai,
+`NOT NULL`, dan unik (primary key atau unique index tunggal); nama tabel dan kolom divalidasi lewat katalog saat diajukan dan sekali
+lagi saat berjalan, lalu di-quote. Tabel dan kolom milik resep; **ukuran batch** (1 sampai 1.000.000) dipilih saat mengajukan run atau
+forward, sehingga leader menyetujui ukuran itu. Saat mulai,
 worker mengambil snapshot nilai terbesar kolom (`scope_max`) sehingga row baru sesudahnya tidak ikut. Tiap batch satu transaction:
 SQL, baris ledger (rentang dan jumlah row), `COMMIT`. Progress di baris execution hanya salinan untuk UI; saat melanjutkan,
 kebenaran dibaca dari ledger.
 - **Gagal di tengah:** `partial` bila minimal satu batch sudah commit, `failed` bila belum.
 - **Retry dari checkpoint:** percobaan berikutnya melanjutkan dari batch berikutnya di ledger, tanpa mengulang batch yang selesai.
-- **Lanjutkan `partial`:** execution baru dengan `continues_execution_id`, mulai dari cursor terakhir di ledger dan memakai
-  `scope_max` yang sama.
-- **Undo batch:** rollback yang menunjuk execution yang dibatalkan (`reverts_execution_id`) menjalankan SQL down per batch
-  dalam urutan terbalik memakai rentang dari ledger. Gagal di tengah menghasilkan `partial` ("partially reverted") yang dapat
-  dilanjutkan; batch yang sudah di-undo dilewati.
+- **Lanjutkan `partial`:** pengajuan `forward` untuk migration itu menjadi execution baru dengan `continues_execution_id`, mulai dari
+  cursor terakhir di ledger dan memakai `scope_max` yang sama. Ukuran batch boleh berbeda.
+- **Undo batch:** pengajuan `rollback` (untuk yang partial maupun yang sudah sukses) menunjuk execution yang dibatalkan
+  (`reverts_execution_id`) dan menjalankan SQL down per batch dalam urutan terbalik memakai rentang dari ledger, termasuk rentang
+  execution yang dilanjutkannya. Gagal di tengah menghasilkan `partial` ("partially reverted") yang dilanjutkan dengan `rollback` lagi;
+  batch yang sudah di-undo dilewati. Migration irreversible tidak bisa dibatalkan.
+- Melanjutkan dan membatalkan adalah pengajuan biasa: butuh EDIT, divalidasi, dan disetujui semua leader **(spek)**.
 
 **Asumsi dan aturan tambahan** (spek tidak mengatur):
 - Sebuah execution `partial` berhenti menahan database setelah ada execution lanjutan atau rollback yang menyelesaikannya
-  dengan status `success` atau `partial`; execution lanjutan tidak ditahan oleh `partial` yang ia lanjutkan.
-- Revalidasi aturan versi dan posisi aktif (rollback hanya untuk yang teratas, forward linear) dipasang lewat `Worker.Revalidate`;
-  worker sendiri hanya menegakkan aturan blokir di atas.
+  dengan status `success` atau `partial`; execution lanjutan tidak ditahan oleh `partial` yang ia lanjutkan atau batalkan.
+- **Partial yang irreversible** tidak bisa dibatalkan, jadi sesuai spek ("tolak dan buat migration perbaikan baru") sebuah run yang
+  **diajukan setelah** partial itu selesai tidak ditahan. Yang diajukan sebelumnya tetap ditahan. Bila run perbaikan itu sukses, migration
+  yang partial dianggap digantikan. Membatalkan run perbaikannya tidak mengembalikan batch partial tadi; batch itu tetap ada di target dan
+  tercatat di riwayat.
 
 **Batasan:**
 - Platform tidak memeriksa apakah data masih aman di-undo. SQL down yang benar adalah tanggung jawab penulis migration,
   dan migration yang tidak dapat dipulihkan harus ditandai irreversible.
 - Kolom batch hanya bilangan bulat; satu statement per batch (tanpa multi-statement).
-- Worker memakai batas waktu yang sama dengan eksekusi M1 (`MIGRATION_STATEMENT_TIMEOUT` 60 detik dan `MIGRATION_EXEC_TIMEOUT` 2 menit)
-  untuk satu transaction. Migration mode normal yang lebih lama dari itu gagal dengan `TIMEOUT` walau dijalankan asynchronous;
-  untuk data besar gunakan mode per-batch, yang batas waktunya berlaku per batch.
+- Worker memakai `MIGRATION_STATEMENT_TIMEOUT` (60 detik) dan `MIGRATION_EXEC_TIMEOUT` (2 menit) untuk satu transaction. Migration mode
+  normal yang lebih lama dari itu gagal dengan `TIMEOUT` atau SQLSTATE `57014` walau dijalankan asynchronous; untuk data besar gunakan
+  mode per-batch, yang batas waktunya berlaku per batch.
 - Sweeper berjalan di dalam worker: bila semua worker mati, pekerjaan menunggu sampai ada worker yang hidup lagi.
+- Batas `RETRY_EXHAUSTED` menghitung proses yang terputus, jadi batch panjang yang workernya dimatikan tiga kali berakhir `partial`
+  walau setiap kali maju; lanjutkan dengan forward.
 - Tidak ada dead-letter queue; execution yang gagal tetap tersimpan sebagai baris `failed` yang dapat dilihat dan di-forward ulang.
-- Tombol "Jalankan" M1 (`POST /api/migrations/:id/execute`) masih sinkron sampai alur pengajuan dan approval menggantikannya;
-  eksekusi M1 tidak lewat antrean.
 
 ### 16. Leader per group dan alur review (Milestone 2)
 
@@ -699,7 +719,7 @@ Yang bukan leader mendapat `403 NOT_AN_APPROVER`; yang tidak punya akses ke data
 yang tidak sesuai mendapat `409 EXECUTION_STATE_CONFLICT`. Selama ada execution terbuka SQL resep tidak bisa diedit; migration
 yang ditolak atau ditarik tetap bisa diperbaiki dan diajukan lagi. SPA menampilkan tombol sesuai `permissions` dari server
 (hanya untuk UX), antrean di **Antrean review** (`GET /api/approvals/pending`, diperbarui tiap 10 detik), dan pengaturan leader
-di halaman **Groups**.
+di halaman **Groups**. Pengaju yang bukan leader menemukan pengajuannya lewat **Eksekusi terakhir** di halaman migration.
 
 **Asumsi dan risiko** (spek tidak mengatur):
 - **Group tanpa leader gagal tertutup.** Selama ada group dengan grant ke sebuah database yang belum punya leader, perubahan
@@ -711,18 +731,17 @@ di halaman **Groups**.
   dipimpin satu orang tidak bisa diubah sama sekali.
 - **Platform Admin dapat mengubah leader dan grant**, sehingga secara teknis dapat mengatur siapa yang menyetujui (admin yang
   menempatkan dirinya ke group dengan grant lalu menjadi leader). Ini tidak dicegah, hanya dicatat: setiap perubahan grant
-  dan leader masuk log terstruktur (`grant.changed`, `leader.changed`) dengan pelaku dan database.
-- **`POST /api/migrations/:id/execute` dari Milestone 1 masih ada** dan menjalankan migration langsung tanpa review dan tanpa
-  antrean. SPA tidak memakainya lagi (tombol di editor mengajukan lewat `POST /migrations/:id/executions`), tetapi pemanggil
-  API langsung dengan hak EDIT masih bisa melewati approval sampai route itu dihapus.
+  dan leader masuk log terstruktur (`grant.changed`, `leader.changed`), termasuk leader yang hilang karena dikeluarkan dari
+  group atau user-nya dihapus, beserta pelakunya.
 
 ### 17. Log terstruktur, masking, dan tracing (Milestone 2)
 
-**Log.** Semua log berbentuk JSON satu baris di stdout (`log/slog`). Atribut tetap: `time`, `level`, `event`, `actor_id`,
+**Log.** Semua log server dan worker berbentuk JSON satu baris di stdout (`log/slog`), termasuk log lambat GORM; mode debug Gin dimatikan
+kecuali `GIN_MODE` diisi. Atribut tetap: `time`, `level`, `event`, `actor_id`,
 `actor`, `database_id`, `status`, `correlation_id`, `trace_id`, `span_id`. Untuk SQL: `query`, `duration_ms`, `rows`, `error`,
-`sqlstate`. Untuk eksekusi: `migration_id`, `execution_id`, `job_id` (sama dengan execution ID), `attempt`, `batch_no`; setiap baris worker juga memuat `actor_id` dan `actor` (pengaju). Nama event berbentuk `area.aksi`:
-`http.request`, `auth.login`, `authz.denied`, `explorer.query`, `execution.approved`, `execution.rejected`,
-`execution.canceled`, `queue.published`, `lock.acquired`, `lock.lost`, `sql.start`, `sql.result`, `sql.commit`, `sql.rollback`,
+`sqlstate`. Untuk eksekusi: `migration_id`, `migration_version` (begitu diketahui), `migration_revision`, `execution_id`, `job_id` (sama dengan execution ID), `attempt`, `batch_no`; setiap baris worker juga memuat `actor_id` dan `actor` (pengaju). Nama event berbentuk `area.aksi`:
+`http.request`, `http.panic`, `auth.login`, `authz.denied`, `explorer.query`, `execution.requested`, `execution.approved`, `execution.rejected`,
+`execution.canceled`, `execution.approval_withdrawn`, `execution.held`, `execution.claimed`, `execution.retry`, `execution.finished`, `queue.published`, `lock.acquired`, `lock.lost`, `sql.start`, `sql.result`, `sql.commit`, `sql.rollback`,
 `recovery.check`, `grant.changed`, `leader.changed`. Mulai, hasil, dan commit atau rollback sebuah SQL dicatat sebagai baris terpisah, masing-masing dengan `status`. Setiap query explorer ke database target dicatat sebagai satu baris `explorer.query` berisi teks query (dimasking), durasi, dan status; jumlah row tidak tersedia di jalur itu, jadi tidak dicatat. Pengajuan eksekusi dicatat sebagai `execution.requested`. Nama event dan atribut ada di satu tempat, `backend/internal/obs`.
 
 **Correlation ID** dibuat server untuk setiap request API (nilai dari klien diabaikan) dan dikirim balik di header
@@ -760,37 +779,39 @@ yang menerbitkan pesan baru, supaya trace tetap menyambung. Karena itu satu pers
 `queue.publish` bila sweeper menerbitkan ulang sebelum penanda "sudah terbit" tertulis; pesan ganda aman karena klaim
 `queued → running` hanya dimenangkan satu pesan.
 
-Contoh nyata dari satu persetujuan (UPDATE sederhana yang dijalankan worker lewat RabbitMQ; keluaran asli dari integration test):
+Contoh nyata dari satu persetujuan terakhir (server dan worker sungguhan, 26 November 2026; nama host pada `owner` diganti):
 
 ```json
-{"time":"2026-11-25T18:13:58.2552001+07:00","level":"INFO","event":"http.request","method":"POST","path":"/api/executions/1/approve","status":200,"duration_ms":124,"actor_id":2,"trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"9d1a333ed7dd8c8f","correlation_id":"b2235169ada375e7"}
-{"time":"2026-11-25T18:13:58.1688993+07:00","level":"INFO","event":"execution.approved","actor_id":2,"actor":"reviewer","migration_id":1,"execution_id":1,"job_id":1,"database_id":1,"status":"approved","trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"6ff8da75d26af419","correlation_id":"b2235169ada375e7"}
-{"time":"2026-11-25T18:13:58.2451506+07:00","level":"INFO","event":"lock.acquired","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"actor_id":1,"actor":"developer","owner":"test/1","lock_token":1,"trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"22ff56b33eabb594","correlation_id":"b2235169ada375e7"}
-{"time":"2026-11-25T18:13:58.2758092+07:00","level":"INFO","event":"sql.start","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"actor_id":1,"actor":"developer","attempt":1,"batch_no":0,"status":"started","query":"UPDATE items SET tag = '?' WHERE qty = 0","trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"c544933e2e334450","correlation_id":"b2235169ada375e7"}
-{"time":"2026-11-25T18:13:58.2768433+07:00","level":"INFO","event":"sql.result","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"actor_id":1,"actor":"developer","attempt":1,"batch_no":0,"status":"ok","duration_ms":1,"rows":95,"trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"c544933e2e334450","correlation_id":"b2235169ada375e7"}
-{"time":"2026-11-25T18:13:58.2792848+07:00","level":"INFO","event":"sql.commit","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"actor_id":1,"actor":"developer","attempt":1,"batch_no":0,"status":"committed","rows":95,"trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"6c35be4bc387e1f1","correlation_id":"b2235169ada375e7"}
+{"time":"2026-11-26T02:55:09.92448+07:00","level":"INFO","event":"execution.approved","actor_id":3,"actor":"reviewer","migration_id":1,"execution_id":1,"job_id":1,"database_id":1,"status":"approved","migration_revision":1,"trace_id":"c306750d520d60351a0212cec42fa184","span_id":"c35b45e8dc93485a","correlation_id":"87af11fd1244d70e"}
+{"time":"2026-11-26T02:55:09.948217+07:00","level":"INFO","event":"queue.published","execution_id":1,"queue":"migration.jobs","trace_id":"c306750d520d60351a0212cec42fa184","span_id":"3fc91990ade92310","correlation_id":"87af11fd1244d70e"}
+{"time":"2026-11-26T02:55:09.94984+07:00","level":"INFO","event":"lock.acquired","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"migration_revision":1,"actor_id":2,"actor":"developer","owner":"worker-1/1","lock_token":1,"trace_id":"c306750d520d60351a0212cec42fa184","span_id":"c8b98ac08e29afdc","correlation_id":"87af11fd1244d70e"}
+{"time":"2026-11-26T02:55:09.952275+07:00","level":"INFO","event":"http.request","method":"POST","path":"/api/executions/1/approve","status":200,"duration_ms":32,"actor_id":3,"trace_id":"c306750d520d60351a0212cec42fa184","span_id":"0a46ba08ef704be8","correlation_id":"87af11fd1244d70e"}
+{"time":"2026-11-26T02:55:09.981066+07:00","level":"INFO","event":"sql.start","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"migration_revision":1,"migration_version":1,"actor_id":2,"actor":"developer","attempt":1,"batch_no":0,"status":"started","query":"ALTER TABLE products ADD COLUMN sku text","trace_id":"c306750d520d60351a0212cec42fa184","span_id":"1cd84abb8565bc74","correlation_id":"87af11fd1244d70e"}
+{"time":"2026-11-26T02:55:09.982154+07:00","level":"INFO","event":"sql.result","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"migration_revision":1,"migration_version":1,"actor_id":2,"actor":"developer","attempt":1,"batch_no":0,"status":"ok","duration_ms":0,"rows":0,"trace_id":"c306750d520d60351a0212cec42fa184","span_id":"1cd84abb8565bc74","correlation_id":"87af11fd1244d70e"}
+{"time":"2026-11-26T02:55:09.983473+07:00","level":"INFO","event":"sql.commit","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"migration_revision":1,"migration_version":1,"actor_id":2,"actor":"developer","attempt":1,"batch_no":0,"status":"committed","rows":0,"trace_id":"c306750d520d60351a0212cec42fa184","span_id":"6f88c7badcf512f0","correlation_id":"87af11fd1244d70e"}
+{"time":"2026-11-26T02:55:09.984952+07:00","level":"INFO","event":"execution.finished","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"migration_revision":1,"migration_version":1,"actor_id":2,"actor":"developer","status":"success","batches":1,"rows":0,"trace_id":"c306750d520d60351a0212cec42fa184","span_id":"c8b98ac08e29afdc","correlation_id":"87af11fd1244d70e"}
 ```
 
-Perhatikan literal `'rahasia'` pada SQL aslinya sudah menjadi `'?'` di log, dan `trace_id` serta `correlation_id` sama dari
-request sampai commit (`correlation_id` sama dengan header `X-Request-ID` respons). Baris worker membawa `actor` (pengaju),
-`migration_id`, dan `job_id`.
+`trace_id` dan `correlation_id` sama dari request sampai commit (`correlation_id` sama dengan header `X-Request-ID` respons). Baris worker
+membawa pengaju (`actor`), `migration_id`, versi, revisi, dan `job_id`. Literal pada `query` disamarkan: `UPDATE items SET tag = 'rahasia'`
+tercatat sebagai `UPDATE items SET tag = '?'`.
 
-Keluaran exporter console untuk dua span dari trace yang sama (`75f9bdfe27653dfb6d240ff0876f34c9`); span lain tersusun seperti tabel di bawahnya:
+Keluaran exporter console untuk dua span dari trace yang sama (`c306750d520d60351a0212cec42fa184`); span lain tersusun seperti tabel di bawahnya:
 
 ```json
-{"Name":"POST /api/executions/:executionId/approve","SpanContext":{"TraceID":"75f9bdfe27653dfb6d240ff0876f34c9","SpanID":"9d1a333ed7dd8c8f","TraceFlags":"01","TraceState":"","Remote":false},"Parent":{"TraceID":"00000000000000000000000000000000","SpanID":"0000000000000000","TraceFlags":"00","TraceState":"","Remote":false},"SpanKind":1,"StartTime":"2026-11-25T18:13:58.1302448+07:00","EndTime":"2026-11-25T18:13:58.2552001+07:00","Attributes":[{"Key":"method","Value":{"Type":"STRING","Value":"POST"}},{"Key":"http.status_code","Value":{"Type":"INT64","Value":200}}],"Events":null,"Links":null,"Status":{"Code":"Unset","Description":""},"DroppedAttributes":0,"DroppedEvents":0,"DroppedLinks":0,"ChildSpanCount":1,"Resource":[{"Key":"service.name","Value":{"Type":"STRING","Value":"unknown_service:worker.test.exe"}},{"Key":"telemetry.sdk.language","Value":{"Type":"STRING","Value":"go"}},{"Key":"telemetry.sdk.name","Value":{"Type":"STRING","Value":"opentelemetry"}},{"Key":"telemetry.sdk.version","Value":{"Type":"STRING","Value":"1.47.0"}}],"InstrumentationScope":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null},"InstrumentationLibrary":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null}}
-{"Name":"sql.query","SpanContext":{"TraceID":"75f9bdfe27653dfb6d240ff0876f34c9","SpanID":"c544933e2e334450","TraceFlags":"01","TraceState":"","Remote":false},"Parent":{"TraceID":"75f9bdfe27653dfb6d240ff0876f34c9","SpanID":"6c35be4bc387e1f1","TraceFlags":"01","TraceState":"","Remote":false},"SpanKind":1,"StartTime":"2026-11-25T18:13:58.2758092+07:00","EndTime":"2026-11-25T18:13:58.2768433+07:00","Attributes":null,"Events":null,"Links":null,"Status":{"Code":"Unset","Description":""},"DroppedAttributes":0,"DroppedEvents":0,"DroppedLinks":0,"ChildSpanCount":0,"Resource":[{"Key":"service.name","Value":{"Type":"STRING","Value":"unknown_service:worker.test.exe"}},{"Key":"telemetry.sdk.language","Value":{"Type":"STRING","Value":"go"}},{"Key":"telemetry.sdk.name","Value":{"Type":"STRING","Value":"opentelemetry"}},{"Key":"telemetry.sdk.version","Value":{"Type":"STRING","Value":"1.47.0"}}],"InstrumentationScope":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null},"InstrumentationLibrary":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null}}
+{"Name":"POST /api/executions/:executionId/approve","SpanContext":{"TraceID":"c306750d520d60351a0212cec42fa184","SpanID":"0a46ba08ef704be8","TraceFlags":"01","TraceState":"","Remote":false},"Parent":{"TraceID":"00000000000000000000000000000000","SpanID":"0000000000000000","TraceFlags":"00","TraceState":"","Remote":false},"SpanKind":1,"StartTime":"2026-11-26T02:55:09.920212+07:00","EndTime":"2026-11-26T02:55:09.952333708+07:00","Attributes":[{"Key":"method","Value":{"Type":"STRING","Value":"POST"}},{"Key":"http.status_code","Value":{"Type":"INT64","Value":200}}],"Events":null,"Links":null,"Status":{"Code":"Unset","Description":""},"DroppedAttributes":0,"DroppedEvents":0,"DroppedLinks":0,"ChildSpanCount":1,"Resource":[{"Key":"service.name","Value":{"Type":"STRING","Value":"unknown_service:server"}},{"Key":"telemetry.sdk.language","Value":{"Type":"STRING","Value":"go"}},{"Key":"telemetry.sdk.name","Value":{"Type":"STRING","Value":"opentelemetry"}},{"Key":"telemetry.sdk.version","Value":{"Type":"STRING","Value":"1.40.0"}}],"InstrumentationScope":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null},"InstrumentationLibrary":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null}}
+{"Name":"sql.query","SpanContext":{"TraceID":"c306750d520d60351a0212cec42fa184","SpanID":"1cd84abb8565bc74","TraceFlags":"01","TraceState":"","Remote":false},"Parent":{"TraceID":"c306750d520d60351a0212cec42fa184","SpanID":"6f88c7badcf512f0","TraceFlags":"01","TraceState":"","Remote":false},"SpanKind":1,"StartTime":"2026-11-26T02:55:09.981058+07:00","EndTime":"2026-11-26T02:55:09.982142208+07:00","Attributes":null,"Events":null,"Links":null,"Status":{"Code":"Unset","Description":""},"DroppedAttributes":0,"DroppedEvents":0,"DroppedLinks":0,"ChildSpanCount":0,"Resource":[{"Key":"service.name","Value":{"Type":"STRING","Value":"unknown_service:worker"}},{"Key":"telemetry.sdk.language","Value":{"Type":"STRING","Value":"go"}},{"Key":"telemetry.sdk.name","Value":{"Type":"STRING","Value":"opentelemetry"}},{"Key":"telemetry.sdk.version","Value":{"Type":"STRING","Value":"1.40.0"}}],"InstrumentationScope":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null},"InstrumentationLibrary":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null}}
 ```
 
 | Span | span_id | induk |
 | --- | --- | --- |
-| `POST /api/executions/:executionId/approve` | `9d1a333ed7dd8c8f` | - |
-| `api.approve` | `6ff8da75d26af419` | `POST /api/executions/:executionId/approve` |
-| `queue.publish` | `3283229004820247` | `api.approve` |
-| `worker.process` | `22ff56b33eabb594` | `queue.publish` |
-| `lock.acquire` | `c7642825056b679c` | `worker.process` |
-| `execute` | `6c35be4bc387e1f1` | `worker.process` |
-| `sql.query` | `c544933e2e334450` | `execute` |
+| `POST /api/executions/:executionId/approve` | `0a46ba08ef704be8` | - |
+| `api.approve` | `c35b45e8dc93485a` | `POST /api/executions/:executionId/approve` |
+| `queue.publish` | `3fc91990ade92310` | `api.approve` |
+| `worker.process` | `c8b98ac08e29afdc` | `queue.publish` |
+| `lock.acquire` | `3c107c0a29510296` | `worker.process` |
+| `execute` | `6f88c7badcf512f0` | `worker.process` |
+| `sql.query` | `1cd84abb8565bc74` | `execute` |
 
 Span yang gagal (`sql.query`, `execute`, dan `worker.process`) diberi status `Error` beserta pesan errornya, dan span request
 berstatus `Error` untuk respons 5xx.
