@@ -50,6 +50,13 @@ func RecordExecution(ctx context.Context, tx *sql.Tx, e LedgerEntry) error {
 	return err
 }
 
+func RecordRowCount(ctx context.Context, tx *sql.Tx, executionID uint, batchNo int, rows int64) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE public.`+ExecutionLedgerTable+` SET row_count = $3 WHERE execution_id = $1 AND batch_no = $2`,
+		executionID, batchNo, rows)
+	return err
+}
+
 func LookupExecution(ctx context.Context, q queryer, executionID uint) ([]LedgerEntry, error) {
 	var exists bool
 	if err := q.QueryRowContext(ctx, `SELECT to_regclass('public.`+ExecutionLedgerTable+`') IS NOT NULL`).Scan(&exists); err != nil {
