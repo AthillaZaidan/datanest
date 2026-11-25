@@ -202,16 +202,55 @@ func TestRevalidationFailureFailsTheExecutionBeforeAnySQLRuns(t *testing.T) {
 	}
 }
 
-func TestAnUncertainExecutionBlocksTheNextOneOnTheSameDatabase(t *testing.T) {
+func TestAnUncertainExecutionHoldsTheNextOneOnTheSameDatabase(t *testing.T) {
 	e := setup(t)
-	e.newExec(models.MigrationExecution{Status: models.ExecUncertain})
+	blocker := e.newExec(models.MigrationExecution{Status: models.ExecUncertain})
 	x := e.newExec(models.MigrationExecution{})
 
-	e.mustProcess(x.ID)
+	e.expectHeld(x.ID, blocker.ID)
+	if e.sumQty() != 0 {
+		t.Fatalf("sum qty = %d: the held SQL ran", e.sumQty())
+	}
 
-	got := e.expectStatus(x.ID, models.ExecFailed)
-	if got.ErrorCode != "BLOCKED" || e.sumQty() != 0 {
-		t.Errorf("row = %+v, sum %d", got, e.sumQty())
+	e.mustProcess(blocker.ID)
+	e.expectStatus(blocker.ID, models.ExecSuccess)
+	e.makeDue(x.ID)
+	e.mustProcess(x.ID)
+	got := e.expectStatus(x.ID, models.ExecSuccess)
+	if got.ErrorCode != "" || got.ErrorMessage != "" || e.sumQty() != 190 {
+		t.Errorf("after the blocker recovered: row %+v, sum qty %d", got, e.sumQty())
+	}
+}
+
+func TestAnExecutionWaitingForARetryIsNotOvertaken(t *testing.T) {
+	e := setup(t)
+	other := e.secondDatabase()
+	failOnce := true
+	e.w.Hooks.BeforeCommit = func(uint, int) error {
+		if failOnce {
+			failOnce = false
+			return ErrInjectedTransient
+		}
+		return nil
+	}
+	retrying := e.newExec(models.MigrationExecution{})
+	fresh := e.newExec(models.MigrationExecution{})
+	elsewhere := e.newExec(models.MigrationExecution{DatabaseID: other.ID})
+	e.mustProcess(retrying.ID)
+	e.expectStatus(retrying.ID, models.ExecQueued)
+
+	e.expectHeld(fresh.ID, retrying.ID)
+	e.mustProcess(elsewhere.ID)
+	e.expectStatus(elsewhere.ID, models.ExecSuccess)
+
+	e.makeDue(retrying.ID)
+	e.mustProcess(retrying.ID)
+	e.expectStatus(retrying.ID, models.ExecSuccess)
+	e.makeDue(fresh.ID)
+	e.mustProcess(fresh.ID)
+	e.expectStatus(fresh.ID, models.ExecSuccess)
+	if first, second := e.get(retrying.ID), e.get(fresh.ID); *first.RunSeq >= *second.RunSeq {
+		t.Errorf("run order = %d then %d, want the retried one first", *first.RunSeq, *second.RunSeq)
 	}
 }
 
