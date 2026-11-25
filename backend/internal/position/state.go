@@ -62,8 +62,6 @@ func open(s models.ExecutionStatus) bool {
 // Derive computes the State from all executions of one database, sorted by id.
 func Derive(events []Event) State {
 	st := State{Redo: map[uint]bool{}, Started: map[uint]bool{}, Open: map[uint]bool{}}
-	lastAttempt := map[uint]uint{} // migration -> id of its latest started run/forward
-	var lastRun uint                // id of the latest started run of any migration
 
 	for _, e := range events {
 		if open(e.Status) {
@@ -72,33 +70,28 @@ func Derive(events []Event) State {
 		if !started(e.Status) {
 			continue
 		}
-		if e.Kind != models.ExecKindRollback {
-			st.Started[e.MigrationID] = true
-			lastAttempt[e.MigrationID] = e.ID
-			if e.Kind == models.ExecKindRun {
-				lastRun = e.ID
-			}
-		}
-		if e.Status != models.ExecSuccess {
-			continue
-		}
+		ok := e.Status == models.ExecSuccess
 		switch e.Kind {
-		case models.ExecKindRun, models.ExecKindForward:
-			st.Active = append(st.Active, Applied{MigrationID: e.MigrationID, ExecutionID: e.ID})
-		case models.ExecKindRollback:
-			if n := len(st.Active); n > 0 && e.Reverts != nil && st.Active[n-1].ExecutionID == *e.Reverts {
-				st.Active = st.Active[:n-1]
+		case models.ExecKindRun:
+			st.Started[e.MigrationID] = true
+			// Running a new migration discards the redo history, whatever its outcome.
+			clear(st.Redo)
+			if ok {
+				st.Active = append(st.Active, Applied{MigrationID: e.MigrationID, ExecutionID: e.ID})
+			} else {
+				st.Redo[e.MigrationID] = true // a failed attempt may be forwarded
 			}
-		}
-	}
-
-	active := map[uint]bool{}
-	for _, a := range st.Active {
-		active[a.MigrationID] = true
-	}
-	for m, at := range lastAttempt {
-		if !active[m] && at >= lastRun {
-			st.Redo[m] = true
+		case models.ExecKindForward:
+			st.Started[e.MigrationID] = true
+			if ok {
+				st.Active = append(st.Active, Applied{MigrationID: e.MigrationID, ExecutionID: e.ID})
+				delete(st.Redo, e.MigrationID)
+			}
+		case models.ExecKindRollback:
+			if n := len(st.Active); ok && n > 0 && e.Reverts != nil && st.Active[n-1].ExecutionID == *e.Reverts {
+				st.Active = st.Active[:n-1]
+				st.Redo[e.MigrationID] = true
+			}
 		}
 	}
 	return st
