@@ -46,20 +46,34 @@ const M1Reason = "Dibuat di Milestone 1, sebelum ada SQL down."
 // which checks the target ledger before settling them.
 func backfillM1History(db *gorm.DB) error {
 	return db.Transaction(func(tx *gorm.DB) error {
-		const settled = `version IS NOT NULL AND status IN ('success', 'failed')
-			AND NOT EXISTS (SELECT 1 FROM migration_executions e WHERE e.migration_id = migrations.id)`
 		err := tx.Exec(`UPDATE migrations SET irreversible = true, irreversible_reason = ?,
 			frozen_at = COALESCE(frozen_at, started_at, updated_at)
-			WHERE sql_down = '' AND `+settled, M1Reason).Error
+			WHERE sql_down = '' AND `+unrecordedRun, M1Reason).Error
 		if err != nil {
 			return err
 		}
-		return tx.Exec(`INSERT INTO migration_executions (migration_id, database_id, kind, status, mode, sql_executed,
-				requested_by_id, requested_by_username, error_message, error_code, created_at, updated_at, started_at, finished_at)
-			SELECT id, database_id, 'run', status, 'normal', sql,
-				executed_by_id, executed_by_username, error_message, error_code,
-				COALESCE(started_at, created_at), now(), started_at, finished_at
-			FROM migrations WHERE ` + settled + `
-			ORDER BY database_id, version`).Error
+		return insertRunExecutions(tx, "TRUE")
 	})
+}
+
+// RecordLegacyRun records the result of the Milestone 1 direct execution of one
+// migration as a run execution. It does nothing until the migration has settled and
+// nothing if the run was recorded already.
+func RecordLegacyRun(db *gorm.DB, migrationID uint) error {
+	return insertRunExecutions(db, "id = ?", migrationID)
+}
+
+// unrecordedRun selects migrations that settled through the Milestone 1 path and
+// have no execution yet.
+const unrecordedRun = `version IS NOT NULL AND status IN ('success', 'failed')
+	AND NOT EXISTS (SELECT 1 FROM migration_executions e WHERE e.migration_id = migrations.id)`
+
+func insertRunExecutions(db *gorm.DB, filter string, args ...any) error {
+	return db.Exec(`INSERT INTO migration_executions (migration_id, database_id, kind, status, mode, sql_executed,
+			requested_by_id, requested_by_username, error_message, error_code, created_at, updated_at, started_at, finished_at)
+		SELECT id, database_id, 'run', status, 'normal', sql,
+			executed_by_id, executed_by_username, error_message, error_code,
+			COALESCE(started_at, created_at), now(), started_at, finished_at
+		FROM migrations WHERE `+unrecordedRun+` AND (`+filter+`)
+		ORDER BY database_id, version`, args...).Error
 }
