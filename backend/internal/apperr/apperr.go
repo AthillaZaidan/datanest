@@ -53,7 +53,6 @@ var (
 	ErrUsernameTaken                = New(http.StatusConflict, "USERNAME_TAKEN", "Username sudah dipakai.")
 	ErrConflict                     = New(http.StatusConflict, "CONFLICT", "Data bentrok dengan data yang sudah ada.")
 	ErrLastAdmin                    = New(http.StatusConflict, "LAST_ADMIN", "Harus selalu ada minimal satu Platform Admin.")
-	ErrMigrationRunning             = New(http.StatusConflict, "MIGRATION_RUNNING", "Sedang ada migration yang berjalan di database ini.")
 	ErrMigrationNotDraft            = New(http.StatusConflict, "MIGRATION_NOT_DRAFT", "Migration ini bukan draft.")
 	ErrExecutionStateConflict       = New(http.StatusConflict, "EXECUTION_STATE_CONFLICT", "Status eksekusi tidak mengizinkan aksi ini.")
 	ErrGroupWithoutLeader           = New(http.StatusConflict, "GROUP_WITHOUT_LEADER", "Ada group dengan akses ke database ini yang belum punya leader.")
