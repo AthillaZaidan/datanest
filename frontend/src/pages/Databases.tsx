@@ -102,7 +102,7 @@ export default function Databases() {
                         <p className="sql truncate font-mono text-[13px] text-muted">{m.sql}</p>
                       </div>
                       <div className="flex flex-none flex-col items-end gap-1">
-                        <StatusBadge status={m.status} />
+                        <StatusBadge migration={m} />
                         <span className="text-xs text-muted">{m.executedBy || m.createdBy}, {ago(m.finishedAt ?? m.updatedAt)}</span>
                       </div>
                     </Link>

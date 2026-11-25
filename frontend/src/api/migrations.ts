@@ -14,6 +14,9 @@ export type Migration = {
   irreversibleReason?: string
   // Set when the first execution starts; the recipe can no longer change (spec: immutable SQL).
   frozenAt: string | null
+  // From the server's derived position, the one source of truth for what is applied.
+  active: boolean
+  forwardable: boolean
   status: MigrationStatus
   errorMessage?: string
   errorCode?: string
@@ -27,6 +30,17 @@ export type Migration = {
   updatedAt: string
   startedAt: string | null
   finishedAt: string | null
+}
+
+// What a migration is now. M1 status alone is not enough: an M2 migration keeps status
+// draft after it runs, and a rolled-back one keeps the status of its old run.
+export type MigrationState = 'draft' | 'running' | 'active' | 'inactive' | 'failed'
+
+export function migrationState(m: Migration): MigrationState {
+  if (m.status === 'running') return 'running'
+  if (m.active) return 'active'
+  if (m.status === 'draft' && !m.frozenAt && m.version === null) return 'draft'
+  return m.status === 'failed' ? 'failed' : 'inactive'
 }
 
 export type MigrationList = { migrations: Migration[]; currentVersion: number }

@@ -144,8 +144,9 @@ function ExistingMigration({ id }: { id: string }) {
   const save = () => run(async () => show(await updateMigration(id, recipe, migration.revision)))
   const current = db?.currentVersion ?? 0
   // The backend re-checks every rule (design D2); these only decide which buttons make sense.
-  const canRollback = migration.version !== null && migration.version === current && !migration.irreversible
-  const canForward = migration.version !== null && migration.version > current
+  const isTop = migration.active && migration.version === current
+  const canRollback = isTop && !migration.irreversible
+  const canForward = migration.forwardable
   const submit = (kind: ExecutionKind, question: string) => {
     if (!confirm(`${question} Permintaan masuk ke review sebelum dijalankan.`)) return
     run(async () => {
@@ -168,18 +169,18 @@ function ExistingMigration({ id }: { id: string }) {
 
   const subtitle =
     migration.status === 'success'
-      ? `Dijalankan ${migration.executedBy} pada ${formatTime(migration.startedAt)}, selesai dalam ${duration(migration.startedAt, migration.finishedAt)}.`
+      ? `Dijalankan ${migration.executedBy} pada ${formatTime(migration.startedAt)}, selesai dalam ${duration(migration.startedAt, migration.finishedAt)}. Saat ini ${migration.active ? 'aktif' : 'tidak aktif'}.`
       : migration.status === 'failed'
         ? `Gagal saat dijalankan ${migration.executedBy} pada ${formatTime(migration.startedAt)}. Perubahan di-rollback, schema tetap di versi sebelumnya.`
         : migration.status === 'running'
           ? `Sedang dijalankan ${migration.executedBy} sejak ${formatTime(migration.startedAt)}.`
           : migration.frozenAt
-            ? `v${migration.version} ${migration.version !== null && migration.version <= current ? 'aktif' : 'tidak aktif'} pada database. Riwayat lengkap ada di halaman riwayat eksekusi.`
+            ? `v${migration.version} ${migration.active ? 'aktif' : 'tidak aktif'} pada database. Riwayat lengkap ada di halaman riwayat eksekusi.`
             : `Draft dari ${migration.createdBy}, dibuat di atas versi ${migration.baseVersion ? `v${migration.baseVersion}` : 'awal'}.`
 
   return (
     <>
-      <PageHeader title={title} badges={<StatusBadge status={migration.status} />} subtitle={subtitle} />
+      <PageHeader title={title} badges={<StatusBadge migration={migration} />} subtitle={subtitle} />
 
       {db?.myLevel === 'VIEW' && <ViewOnlyNotice />}
 
@@ -251,7 +252,7 @@ function ExistingMigration({ id }: { id: string }) {
                   <RefreshIcon /> Forward
                 </button>
               )}
-              {migration.irreversible && migration.version === current && (
+              {migration.irreversible && isTop && (
                 <span className={ui.small}>Irreversible: {migration.irreversibleReason}. Tidak bisa di-rollback.</span>
               )}
               {(migration.status !== 'draft' || migration.frozenAt) && (
