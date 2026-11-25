@@ -407,3 +407,22 @@ func TestExplainMigration(t *testing.T) {
 		t.Fatal("explain kept the DDL")
 	}
 }
+
+func TestDirectExecuteRouteIsGone(t *testing.T) {
+	e := setupMigrations(t)
+	d := e.draft(t, "CREATE TABLE direct (id int)")
+
+	r := call(e.as(e.editor), "POST", "/api/migrations/"+itoa(d.ID)+"/execute", nil)
+	if r.Code != 404 {
+		t.Errorf("POST /execute = %d, want 404", r.Code)
+	}
+	if e.tableExists(t, "direct") {
+		t.Error("the SQL ran")
+	}
+	if rows := e.runsOf(t, d.ID); len(rows) != 0 {
+		t.Errorf("recorded %d executions", len(rows))
+	}
+	if v := e.get(t, d.ID); v.Status != models.MigrationDraft || v.Version != nil {
+		t.Errorf("migration changed: %+v", v)
+	}
+}
