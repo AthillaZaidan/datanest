@@ -3,19 +3,25 @@
 package migration_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 	"github.com/AthillaZaidan/datanest/backend/internal/position"
 	"github.com/AthillaZaidan/datanest/backend/internal/testutil"
 	"github.com/AthillaZaidan/datanest/backend/internal/worker"
@@ -593,5 +599,279 @@ func TestRunForcesStandardConformingStringsOn(t *testing.T) {
 	}
 	if value != "on" {
 		t.Fatalf("standard_conforming_strings = %q during the run", value)
+	}
+}
+
+type capturedLogs struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (c *capturedLogs) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+func (c *capturedLogs) event(t *testing.T, name string, executionID uint) map[string]any {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	dec := json.NewDecoder(bytes.NewReader(c.buf.Bytes()))
+	for dec.More() {
+		var line map[string]any
+		if err := dec.Decode(&line); err != nil {
+			t.Fatalf("log is not JSON: %v", err)
+		}
+		if line[obs.AttrEvent] == name && line[obs.AttrExecutionID] == float64(executionID) {
+			return line
+		}
+	}
+	return nil
+}
+
+func captureLogs(t *testing.T) *capturedLogs {
+	t.Helper()
+	logs := &capturedLogs{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(obs.NewHandler(logs, slog.LevelDebug)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return logs
+}
+
+func TestExecutionsRecordTheVersionAndRevisionOfTheirMigration(t *testing.T) {
+	logs := captureLogs(t)
+	f := setupFlow(t)
+	a := f.recipe("CREATE TABLE a (id int)", "DROP TABLE a")
+	for revision := 1; revision <= 2; revision++ {
+		_, err := f.svc.Update(f.ctx, f.editor.ID, a, migration.Recipe{SQLUp: "CREATE TABLE a (id int)", SQLDown: "DROP TABLE a"}, revision)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	requested, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requested.Revision != 3 || requested.Version != nil {
+		t.Fatalf("submitted run has revision %d version %v, want 3 and none", requested.Revision, requested.Version)
+	}
+	if line := logs.event(t, obs.EventExecutionRequested, requested.ID); line == nil || line[obs.AttrMigrationRevision] != float64(3) || line[obs.AttrMigrationVersion] != nil {
+		t.Errorf("execution.requested = %v, want revision 3 and no version", line)
+	}
+
+	run := f.run(*requested)
+	if run.Version == nil || *run.Version != 1 || run.Revision != 3 {
+		t.Fatalf("run has version %v revision %d, want 1 and 3", run.Version, run.Revision)
+	}
+	for _, event := range []string{obs.EventSQLStart, obs.EventSQLCommit} {
+		line := logs.event(t, event, run.ID)
+		if line == nil || line[obs.AttrMigrationVersion] != float64(1) || line[obs.AttrMigrationRevision] != float64(3) {
+			t.Errorf("%s = %v, want version 1 and revision 3", event, line)
+		}
+	}
+
+	rollback := f.do(a, models.ExecKindRollback)
+	forward := f.do(a, models.ExecKindForward)
+	for name, e := range map[string]models.MigrationExecution{"rollback": rollback, "forward": forward} {
+		if e.Version == nil || *e.Version != 1 || e.Revision != 3 {
+			t.Errorf("%s has version %v revision %d, want 1 and 3", name, e.Version, e.Revision)
+		}
+	}
+	queued, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.Version == nil || *queued.Version != 1 || queued.Revision != 3 {
+		t.Errorf("submitted rollback has version %v revision %d, want 1 and 3", queued.Version, queued.Revision)
+	}
+
+	history, err := f.svc.History(f.ctx, f.viewer.ID, f.dbID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 {
+		t.Fatalf("history has %d items, want 3", len(history))
+	}
+	for _, it := range history {
+		if it.Version == nil || *it.Version != 1 || it.Revision != 3 {
+			t.Errorf("history item %d has version %v revision %d, want 1 and 3", it.ID, it.Version, it.Revision)
+		}
+	}
+}
+
+func TestHistoryVersionComesFromTheExecutionBeforeTheMigration(t *testing.T) {
+	f := setupFlow(t)
+	a := f.recipe("SELECT 1", "SELECT 1")
+	if err := f.platform.Model(&models.Migration{}).Where("id = ?", a).Update("version", 5).Error; err != nil {
+		t.Fatal(err)
+	}
+	own := 2
+	create := func(version *int) models.MigrationExecution {
+		return testutil.CreateExecution(t, f.platform, models.MigrationExecution{
+			MigrationID: a, DatabaseID: f.dbID, Status: models.ExecSuccess, Version: version, Revision: 1})
+	}
+	withVersion, withoutVersion := create(&own), create(nil)
+
+	history, err := f.svc.History(f.ctx, f.viewer.ID, f.dbID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[uint]*int{}
+	for _, it := range history {
+		got[it.ID] = it.Version
+	}
+	if v := got[withVersion.ID]; v == nil || *v != 2 {
+		t.Errorf("execution with its own version shows %v, want 2", v)
+	}
+	if v := got[withoutVersion.ID]; v == nil || *v != 5 {
+		t.Errorf("execution without a version shows %v, want the migration's 5", v)
+	}
+}
+
+func lastExecutionOf(t *testing.T, f *flow, id uint) *migration.LastExecution {
+	t.Helper()
+	v, err := f.svc.Get(f.ctx, f.viewer.ID, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v.LastExecution
+}
+
+func TestViewShowsTheLastExecutionWhateverItsStatus(t *testing.T) {
+	f := setupFlow(t)
+	a := f.recipe("CREATE TABLE a (id int)", "DROP TABLE a")
+	other := f.recipe("CREATE TABLE b (id int)", "DROP TABLE b")
+	if got := lastExecutionOf(t, f, a); got != nil {
+		t.Fatalf("draft has last execution %+v", got)
+	}
+
+	first, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := func(step string, e models.ExecutionStatus, id uint, kind models.ExecutionKind) {
+		t.Helper()
+		got := lastExecutionOf(t, f, a)
+		if got == nil || got.ID != id || got.Kind != kind || got.Status != e {
+			t.Errorf("%s: last execution = %+v, want #%d %s %s", step, got, id, kind, e)
+		}
+	}
+	want("pending review", models.ExecPendingReview, first.ID, models.ExecKindRun)
+
+	f.setStatus(*first, models.ExecRejected)
+	want("rejected", models.ExecRejected, first.ID, models.ExecKindRun)
+
+	second, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want("second request", models.ExecPendingReview, second.ID, models.ExecKindRun)
+	done := f.run(*second)
+	want("success", models.ExecSuccess, done.ID, models.ExecKindRun)
+
+	undo := f.do(a, models.ExecKindRollback)
+	want("rollback", models.ExecSuccess, undo.ID, models.ExecKindRollback)
+	if got := lastExecutionOf(t, f, other); got != nil {
+		t.Errorf("another draft shows %+v", got)
+	}
+
+	list, err := f.svc.List(f.ctx, f.viewer.ID, f.dbID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range list.Migrations {
+		switch v.ID {
+		case a:
+			if v.LastExecution == nil || v.LastExecution.ID != undo.ID {
+				t.Errorf("list shows %+v for the executed migration, want #%d", v.LastExecution, undo.ID)
+			}
+		case other:
+			if v.LastExecution != nil {
+				t.Errorf("list shows %+v for the draft", v.LastExecution)
+			}
+		}
+	}
+}
+
+func TestViewShowsThePartialExecutionOfThisMigrationOnly(t *testing.T) {
+	f := setupFlow(t)
+	a := f.recipe("CREATE TABLE IF NOT EXISTS a (id int)", "DROP TABLE IF EXISTS a")
+	b := f.recipe("CREATE TABLE IF NOT EXISTS b (id int)", "DROP TABLE IF EXISTS b")
+	partialOf := func(id uint) *migration.PartialExecution {
+		t.Helper()
+		v, err := f.svc.Get(f.ctx, f.viewer.ID, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.Partial
+	}
+	if partialOf(a) != nil {
+		t.Fatal("a migration without executions shows a partial execution")
+	}
+
+	run := f.do(a, models.ExecKindRun)
+	if partialOf(a) != nil {
+		t.Error("a successful run shows a partial execution")
+	}
+	f.setStatus(run, models.ExecPartial)
+	got := partialOf(a)
+	if got == nil || got.ExecutionID != run.ID || got.Kind != models.ExecKindRun {
+		t.Errorf("partial run shows %+v, want #%d run", got, run.ID)
+	}
+	if partialOf(b) != nil {
+		t.Error("the partial execution of one migration shows on another")
+	}
+	list, err := f.svc.List(f.ctx, f.viewer.ID, f.dbID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range list.Migrations {
+		if (v.ID == a) != (v.Partial != nil) {
+			t.Errorf("list: migration %d shows partial %+v", v.ID, v.Partial)
+		}
+	}
+
+	f.do(a, models.ExecKindForward)
+	if partialOf(a) != nil {
+		t.Error("a continued execution still shows as partial")
+	}
+}
+
+type queryCounter struct {
+	logger.Interface
+	n int
+}
+
+func (q *queryCounter) Trace(_ context.Context, _ time.Time, _ func() (string, int64), _ error) {
+	q.n++
+}
+
+func TestListReadsLastExecutionsWithoutAQueryPerMigration(t *testing.T) {
+	f := setupFlow(t)
+	counter := &queryCounter{Interface: logger.Discard}
+	counted := migration.New(f.platform.Session(&gorm.Session{Logger: counter}), testutil.StaticProvider{DB: f.target},
+		allow{f.viewer.ID: authz.View}, migration.Options{})
+	queries := func() int {
+		t.Helper()
+		counter.n = 0
+		if _, err := counted.List(f.ctx, f.viewer.ID, f.dbID, ""); err != nil {
+			t.Fatal(err)
+		}
+		return counter.n
+	}
+	for i := 0; i < 2; i++ {
+		id := f.recipe("SELECT 1", "SELECT 1")
+		if _, err := f.svc.Submit(f.ctx, f.editor.ID, id, models.ExecKindRun); err != nil {
+			t.Fatal(err)
+		}
+	}
+	few := queries()
+	for i := 0; i < 6; i++ {
+		f.recipe("SELECT 1", "SELECT 1")
+	}
+	if many := queries(); many != few {
+		t.Errorf("listing 8 migrations took %d queries, listing 2 took %d", many, few)
 	}
 }
