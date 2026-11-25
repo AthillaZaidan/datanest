@@ -113,9 +113,10 @@ func TestTraceAndCorrelationIDRunFromTheApprovalIntoTheWorker(t *testing.T) {
 	rec, logs := observe(t)
 	e := setup(t)
 	requester := testutil.CreateUser(t, e.platform, "dev")
+	version := 7
 	x := e.newExec(models.MigrationExecution{
 		Status: models.ExecPendingReview, SQLExecuted: `UPDATE items SET tag = 'hunter2'`,
-		RequestedByID: &requester.ID, RequestedByUsername: "dev",
+		RequestedByID: &requester.ID, RequestedByUsername: "dev", Version: &version, Revision: 4,
 	})
 	queued := e.approvedBy(x, "req-42")
 	if queued.CorrelationID != "req-42" || !strings.HasPrefix(queued.Traceparent, "00-") {
@@ -174,6 +175,9 @@ func TestTraceAndCorrelationIDRunFromTheApprovalIntoTheWorker(t *testing.T) {
 		if line[obs.AttrActorID] != float64(requester.ID) || line[obs.AttrActor] != "dev" ||
 			line[obs.AttrMigrationID] != float64(x.MigrationID) || line[obs.AttrJobID] != float64(x.ID) {
 			t.Errorf("%s lacks the actor or the migration/job ids: %v", ev, line)
+		}
+		if line[obs.AttrMigrationVersion] != float64(version) || line[obs.AttrMigrationRevision] != float64(4) {
+			t.Errorf("%s lacks the migration version or revision: %v", ev, line)
 		}
 	}
 	for ev, want := range map[string]string{obs.EventSQLStart: "started", obs.EventSQLResult: "ok", obs.EventSQLCommit: "committed"} {
