@@ -11,6 +11,12 @@ export class ApiError extends Error {
   }
 }
 
+export function detailTexts(e: Error): string[] {
+  const details = e instanceof ApiError ? e.details : undefined
+  if (typeof details !== 'object' || details === null) return []
+  return Object.values(details).filter((v): v is string => typeof v === 'string' && v !== '')
+}
+
 let csrfToken: string | null = null
 let unauthenticated: (() => void) | null = null
 
