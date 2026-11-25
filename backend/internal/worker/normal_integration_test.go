@@ -5,10 +5,13 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/dblock"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration"
@@ -200,6 +203,26 @@ func TestRevalidationFailureFailsTheExecutionBeforeAnySQLRuns(t *testing.T) {
 	if e.sumQty() != 0 || e.lockHeld(e.conn.ID) {
 		t.Error("SQL ran or the lock is still held")
 	}
+}
+
+func TestAPlatformFailureDuringRevalidationIsRetried(t *testing.T) {
+	e := setup(t)
+	x := e.newExec(models.MigrationExecution{})
+	failures := 0
+	e.w.Revalidate = func(context.Context, *models.MigrationExecution) error {
+		if failures++; failures == 1 {
+			return fmt.Errorf("load: %w", &pgconn.PgError{Code: "57P01", Message: "terminating connection"})
+		}
+		return nil
+	}
+
+	e.mustProcess(x.ID)
+	if got := e.expectStatus(x.ID, models.ExecQueued); got.ErrorCode != "57P01" || got.Attempts != 1 {
+		t.Errorf("row = %+v", got)
+	}
+	e.makeDue(x.ID)
+	e.mustProcess(x.ID)
+	e.expectStatus(x.ID, models.ExecSuccess)
 }
 
 func TestAnUncertainExecutionHoldsTheNextOneOnTheSameDatabase(t *testing.T) {
