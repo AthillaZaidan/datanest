@@ -4,6 +4,7 @@ import { ApiError } from '../api/client'
 import { getDatabase } from '../api/databases'
 import {
   type Migration,
+  type Recipe,
   createMigration,
   deleteMigration,
   duplicateMigration,
@@ -14,7 +15,8 @@ import {
 import { CopyIcon, PlayIcon, SaveIcon, TrashIcon } from '../components/icons'
 import { Alert, Loading, Meta, PageHeader } from '../components/kit'
 import PlanPanel from '../components/migrations/PlanPanel'
-import SqlEditor from '../components/migrations/SqlEditor'
+import RecipeEditor from '../components/migrations/RecipeEditor'
+import { emptyRecipe, recipeComplete, recipeOf, sameRecipe } from '../components/migrations/recipe'
 import StatusBadge from '../components/migrations/StatusBadge'
 import { ui } from '../components/ui'
 import { useCrumbs } from '../context/crumbs'
@@ -47,7 +49,7 @@ function crumbsFor(databaseId: number | string, name: string | undefined, last: 
 function NewMigration({ databaseId }: { databaseId: string }) {
   const navigate = useNavigate()
   const db = useDatabase(databaseId)
-  const [sql, setSql] = useState('')
+  const [recipe, setRecipe] = useState<Recipe>(emptyRecipe)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   useCrumbs(crumbsFor(databaseId, db?.name, 'Migration baru'))
@@ -56,7 +58,7 @@ function NewMigration({ databaseId }: { databaseId: string }) {
     setBusy(true)
     setError(null)
     try {
-      const m = await createMigration(databaseId, sql)
+      const m = await createMigration(databaseId, recipe)
       navigate(`/migrations/${m.id}`)
     } catch (e) {
       setError((e as Error).message)
@@ -74,10 +76,10 @@ function NewMigration({ databaseId }: { databaseId: string }) {
         <ViewOnlyNotice />
       ) : (
         <div className="max-w-[960px]">
-          <SqlEditor value={sql} onChange={setSql} placeholder="ALTER TABLE products ADD COLUMN sku text;" />
+          <RecipeEditor value={recipe} onChange={setRecipe} />
           {error && <div className="mt-4"><Alert>{error}</Alert></div>}
           <div className="mt-4 flex items-center gap-3">
-            <button className={ui.buttonPrimary} disabled={busy || !sql.trim()} onClick={save}>
+            <button className={ui.buttonPrimary} disabled={busy || !recipeComplete(recipe)} onClick={save}>
               <SaveIcon /> Simpan draft
             </button>
             <span className={ui.small}>Satu migration dijalankan dalam satu transaction. BEGIN, COMMIT, dan ROLLBACK tidak diperlukan.</span>
@@ -91,7 +93,7 @@ function NewMigration({ databaseId }: { databaseId: string }) {
 function ExistingMigration({ id }: { id: string }) {
   const navigate = useNavigate()
   const [migration, setMigration] = useState<Migration | null>(null)
-  const [sql, setSql] = useState('')
+  const [recipe, setRecipe] = useState<Recipe>(emptyRecipe)
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [busy, setBusy] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -105,7 +107,7 @@ function ExistingMigration({ id }: { id: string }) {
       (m) => {
         if (!active) return
         setMigration(m)
-        setSql(m.sql)
+        setRecipe(recipeOf(m))
         setError(null)
       },
       (e: Error) => active && setError(e),
@@ -130,14 +132,15 @@ function ExistingMigration({ id }: { id: string }) {
   if (!migration) return error ? <Alert>{error.message}</Alert> : <Loading rows={6} />
 
   const canEdit = db?.myLevel === 'EDIT'
-  const isDraft = migration.status === 'draft'
-  const dirty = sql !== migration.sql
+  // A draft whose first execution started is frozen: its SQL is kept exactly as it ran.
+  const isDraft = migration.status === 'draft' && !migration.frozenAt
+  const dirty = !sameRecipe(recipe, recipeOf(migration))
   const show = (m: Migration) => {
     setMigration(m)
-    setSql(m.sql)
+    setRecipe(recipeOf(m))
   }
 
-  const save = () => run(async () => show(await updateMigration(id, sql, migration.revision)))
+  const save = () => run(async () => show(await updateMigration(id, recipe, migration.revision)))
   const execute = () => {
     if (!confirm('Jalankan migration ini pada database target?')) return
     run(async () => show(await executeMigration(id)))
@@ -191,7 +194,12 @@ function ExistingMigration({ id }: { id: string }) {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_288px] lg:items-start">
         <div className="min-w-0 space-y-4">
-          <SqlEditor value={sql} readOnly={!isDraft || !canEdit} onChange={setSql} />
+          {migration.frozenAt && (
+            <Alert tone="info">
+              SQL terkunci sejak {formatTime(migration.frozenAt)} karena sudah pernah dieksekusi. Perbaikan dibuat sebagai migration baru.
+            </Alert>
+          )}
+          <RecipeEditor value={recipe} readOnly={!isDraft || !canEdit} onChange={setRecipe} />
 
           {migration.status === 'failed' && migration.errorMessage && (
             <div className="rounded-lg bg-neg-bg px-4 py-3 text-sm text-neg-ink">
@@ -206,7 +214,7 @@ function ExistingMigration({ id }: { id: string }) {
             <div className="flex flex-wrap items-center gap-2">
               {isDraft && (
                 <>
-                  <button className={ui.button} disabled={busy || !dirty || !sql.trim()} onClick={save}>
+                  <button className={ui.button} disabled={busy || !dirty || !recipeComplete(recipe)} onClick={save}>
                     <SaveIcon /> Simpan
                   </button>
                   <button

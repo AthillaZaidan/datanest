@@ -7,6 +7,12 @@ export type Migration = {
   databaseId: number
   version: number | null
   sql: string
+  sqlUp: string
+  sqlDown: string
+  irreversible: boolean
+  irreversibleReason?: string
+  // Set when the first execution starts; the recipe can no longer change (spec: immutable SQL).
+  frozenAt: string | null
   status: MigrationStatus
   errorMessage?: string
   errorCode?: string
@@ -31,16 +37,18 @@ export function listMigrations(databaseId: string, status = '') {
   return api<MigrationList>(`/databases/${enc(databaseId)}/migrations${q}`)
 }
 
-export function createMigration(databaseId: string, sql: string) {
-  return send<Migration>('POST', `/databases/${enc(databaseId)}/migrations`, { sql })
+export type Recipe = { sqlUp: string; sqlDown: string; irreversible: boolean; irreversibleReason: string }
+
+export function createMigration(databaseId: string, recipe: Recipe) {
+  return send<Migration>('POST', `/databases/${enc(databaseId)}/migrations`, recipe)
 }
 
 export function getMigration(id: string) {
   return api<Migration>(`/migrations/${enc(id)}`)
 }
 
-export function updateMigration(id: string, sql: string, revision: number) {
-  return send<Migration>('PATCH', `/migrations/${enc(id)}`, { sql, revision })
+export function updateMigration(id: string, recipe: Recipe, revision: number) {
+  return send<Migration>('PATCH', `/migrations/${enc(id)}`, { ...recipe, revision })
 }
 
 export function deleteMigration(id: string) {
