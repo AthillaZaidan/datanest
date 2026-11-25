@@ -239,7 +239,9 @@ function ExistingMigration({ id }: { id: string }) {
           <Link className={ui.link} to={`/executions/${migration.partial.executionId}`}>E{migration.partial.executionId}</Link> berhenti di tengah jalan:{' '}
           {migration.partial.kind === 'rollback'
             ? 'sebagian batch sudah dibatalkan. Lanjutkan sampai selesai.'
-            : `sebagian batch sudah committed. Lanjutkan dari checkpoint terakhir${actions.undo ? ' atau batalkan batch yang sudah committed' : '. Migration ini irreversible, batch yang sudah committed tidak bisa dibatalkan'}.`}
+            : actions.undo
+              ? 'sebagian batch sudah committed. Lanjutkan dari checkpoint terakhir atau batalkan batch yang sudah committed.'
+              : 'sebagian batch sudah committed. Migration ini irreversible sehingga batch-nya tidak bisa dibatalkan. Lanjutkan, atau ajukan migration perbaikan baru.'}
         </Alert>
       )}
 
