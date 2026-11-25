@@ -88,6 +88,10 @@ func TestConnectionsAndAccess(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
+	// Milestone 1 rows join the execution history when the schema is upgraded.
+	if e = models.Migrate(db); e != nil {
+		t.Fatal(e)
+	}
 	if list, e = s.ListForUser(ctx, u.ID); e != nil || list[0].CurrentVersion != 2 {
 		t.Fatalf("current version %+v %v", list, e)
 	}
