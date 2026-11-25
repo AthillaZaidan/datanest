@@ -3,6 +3,7 @@ package httpapi
 
 import (
 	"github.com/AthillaZaidan/datanest/backend/internal/admin"
+	"github.com/AthillaZaidan/datanest/backend/internal/approval"
 	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
 	"github.com/AthillaZaidan/datanest/backend/internal/execution"
 	"log"
@@ -29,6 +30,7 @@ type Deps struct {
 	Explorer     *explorer.Service
 	Migrations   *migration.Service
 	Executions   *execution.Service
+	Approvals    *approval.Service
 }
 
 func NewRouter(d Deps) *gin.Engine {
@@ -60,6 +62,13 @@ func NewRouter(d Deps) *gin.Engine {
 	submitExec := notImplemented
 	if d.Migrations != nil && d.Executions != nil {
 		submitExec = submissionHandlers{migrations: d.Migrations, executions: d.Executions}.submit
+	}
+
+	approve, reject, cancelExec, withdraw, pending := notImplemented, notImplemented, notImplemented, notImplemented, notImplemented
+	if d.Approvals != nil && d.Executions != nil {
+		h := approvalHandlers{approvals: d.Approvals, executions: d.Executions}
+		approve, reject, cancelExec, withdraw = h.act(h.approve), h.act(h.reject), h.act(h.cancel), h.act(h.withdraw)
+		pending = h.pending
 	}
 
 	ah := adminHandlers{svc: d.Admin}
@@ -142,6 +151,11 @@ func NewRouter(d Deps) *gin.Engine {
 	user.GET("/databases/:databaseId/executions", historyExec)
 	user.POST("/migrations/:migrationId/executions", submitExec)
 	user.GET("/executions/:executionId", getExec)
+	user.POST("/executions/:executionId/approve", approve)
+	user.POST("/executions/:executionId/reject", reject)
+	user.POST("/executions/:executionId/cancel", cancelExec)
+	user.POST("/executions/:executionId/withdraw", withdraw)
+	user.GET("/approvals/pending", pending)
 
 	return r
 }
