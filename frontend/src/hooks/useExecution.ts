@@ -8,20 +8,24 @@ export type ExecutionWatch = {
   stale: boolean
   delayMs: number | null
   updatedAt: number | null
+  refresh: () => void
 }
 
-const initial: ExecutionWatch = { execution: null, error: null, stale: false, delayMs: null, updatedAt: null }
+type WatchState = Omit<ExecutionWatch, 'refresh'>
+
+const initial: WatchState = { execution: null, error: null, stale: false, delayMs: null, updatedAt: null }
 
 const stopStatuses = new Set([401, 403, 404])
 const RETRY_MS = 10_000
 
 export function useExecution(id: string, fetcher: ExecutionFetcher): ExecutionWatch {
-  const [state, setState] = useState<ExecutionWatch & { id: string }>({ ...initial, id })
+  const [state, setState] = useState<WatchState & { id: string }>({ ...initial, id })
+  const [tick, setTick] = useState(0)
 
   useEffect(() => {
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
-    const patch = (next: (w: ExecutionWatch) => ExecutionWatch) =>
+    const patch = (next: (w: WatchState) => WatchState) =>
       setState((s) => ({ ...next(s.id === id ? s : initial), id }))
 
     async function poll() {
@@ -48,7 +52,7 @@ export function useExecution(id: string, fetcher: ExecutionFetcher): ExecutionWa
       controller.abort()
       clearTimeout(timer)
     }
-  }, [id, fetcher])
+  }, [id, fetcher, tick])
 
-  return state.id === id ? state : initial
+  return { ...(state.id === id ? state : initial), refresh: () => setTick((n) => n + 1) }
 }

@@ -8,14 +8,25 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
+	"github.com/AthillaZaidan/datanest/backend/internal/migration"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 )
 
 func (w *Worker) Run(ctx context.Context, cl *Claimed) error {
+	ctx = cl.bind(ctx)
+	defer cl.end()
 	runCtx, cancel := context.WithCancelCause(ctx)
 	heartbeat := w.startHeartbeat(runCtx, cancel, cl)
 
 	batches, rows, err := w.execute(runCtx, cl)
+	if err != nil && cl.span != nil {
+		cl.span.RecordError(err)
+		cl.span.SetStatus(codes.Error, err.Error())
+	}
 
 	lost := errors.Is(context.Cause(runCtx), errLockLost)
 	cancel(nil)
@@ -25,7 +36,7 @@ func (w *Worker) Run(ctx context.Context, cl *Claimed) error {
 		return err
 	}
 	if lost && err != nil {
-		slog.Warn("lock.lost", "execution_id", cl.Exec.ID, "database_id", cl.Exec.DatabaseID, "worker", cl.Owner)
+		slog.WarnContext(ctx, obs.EventLockLost, logAttrs(&cl.Exec, "worker", cl.Owner)...)
 		return errLockLost
 	}
 
@@ -37,8 +48,19 @@ func (w *Worker) Run(ctx context.Context, cl *Claimed) error {
 	return ferr
 }
 
-func (w *Worker) execute(ctx context.Context, cl *Claimed) (int, int64, error) {
+func (w *Worker) execute(ctx context.Context, cl *Claimed) (batches int, rows int64, err error) {
+	ctx, sp := obs.Start(ctx, obs.SpanExecute, attribute.String("kind", string(cl.Exec.Kind)), attribute.String("mode", string(cl.Exec.Mode)))
+	defer func() {
+		if err != nil {
+			sp.RecordError(err)
+			sp.SetStatus(codes.Error, err.Error())
+		}
+		sp.End()
+	}()
 	e := &cl.Exec
+	if cl.From == models.ExecUncertain {
+		w.logRecoveryCheck(ctx, e)
+	}
 	if err := w.store.StartAttempt(context.WithoutCancel(ctx), e, cl.Owner); err != nil {
 		return 0, 0, err
 	}
@@ -57,6 +79,25 @@ func (w *Worker) execute(ctx context.Context, cl *Claimed) (int, int64, error) {
 	default:
 		return w.runNormal(ctx, db, e)
 	}
+}
+
+func (w *Worker) logRecoveryCheck(ctx context.Context, e *models.MigrationExecution) {
+	attrs := jobAttrs(e)
+	db, err := w.targets.Get(ctx, e.DatabaseID)
+	if err != nil {
+		slog.WarnContext(ctx, obs.EventRecoveryCheck, append(attrs, "result", "unreachable", obs.AttrError, err.Error())...)
+		return
+	}
+	entries, err := migration.LookupExecution(ctx, db, e.ID)
+	if err != nil {
+		slog.WarnContext(ctx, obs.EventRecoveryCheck, append(attrs, "result", "unreadable", obs.AttrError, err.Error())...)
+		return
+	}
+	result := "no_evidence"
+	if len(entries) > 0 {
+		result = "evidence"
+	}
+	slog.InfoContext(ctx, obs.EventRecoveryCheck, append(attrs, "result", result, "ledger_entries", len(entries))...)
 }
 
 func (w *Worker) revalidate(ctx context.Context, e *models.MigrationExecution) error {
@@ -111,7 +152,7 @@ func (w *Worker) finalize(ctx context.Context, cl *Claimed, batches int, rows in
 	e := &cl.Exec
 	attempt := func(status models.AttemptStatus, code, message string) {
 		if err := w.store.FinishAttempt(wctx, e.ID, e.Attempts, status, code, message); err != nil {
-			slog.Error("attempt.finish_failed", "execution_id", e.ID, "error", err)
+			slog.ErrorContext(ctx, "attempt.finish_failed", logAttrs(e, obs.AttrError, err)...)
 		}
 	}
 	logIgnored := func(ok bool, err error, what string) error {
@@ -119,7 +160,7 @@ func (w *Worker) finalize(ctx context.Context, cl *Claimed, batches int, rows in
 			return err
 		}
 		if !ok {
-			slog.Warn("execution.write_ignored", "execution_id", e.ID, "what", what, "worker", cl.Owner)
+			slog.WarnContext(ctx, "execution.write_ignored", logAttrs(e, "what", what, "worker", cl.Owner)...)
 		}
 		return nil
 	}
@@ -132,31 +173,31 @@ func (w *Worker) finalize(ctx context.Context, cl *Claimed, batches int, rows in
 		}
 		ok, err := w.store.Finish(wctx, e.ID, cl.Owner, models.ExecSuccess, "", "", batches, rows)
 		attempt(models.AttemptSuccess, "", "")
-		slog.Info("execution.finished", "execution_id", e.ID, "status", "success", "batches", batches, "rows", rows)
+		slog.InfoContext(ctx, "execution.finished", logAttrs(e, obs.AttrStatus, "success", "batches", batches, obs.AttrRows, rows)...)
 		return logIgnored(ok, err, "success")
 	}
 
 	code, message := describe(runErr)
-	slog.Warn("execution.error", "execution_id", e.ID, "database_id", e.DatabaseID, "attempt", e.Attempts, "code", code, "error", runErr)
+	slog.WarnContext(ctx, "execution.error", logAttrs(e, obs.AttrAttempt, e.Attempts, "code", code, obs.AttrError, runErr)...)
 	switch classify(runErr) {
 	case kindUnknown:
 		attempt(models.AttemptUncertain, code, message)
 		ok, err := w.store.MarkUncertain(wctx, e.ID, cl.Owner, 0, code, message)
-		slog.Warn("execution.uncertain", "execution_id", e.ID, "code", code)
+		slog.WarnContext(ctx, "execution.uncertain", logAttrs(e, obs.AttrStatus, "uncertain", "code", code)...)
 		return logIgnored(ok, err, "uncertain")
 
 	case kindTransient:
 		if cl.From == models.ExecUncertain {
 			attempt(models.AttemptUncertain, code, message)
 			ok, err := w.store.MarkUncertain(wctx, e.ID, cl.Owner, w.cfg.UncertainRetry, code, message)
-			slog.Warn("execution.still_uncertain", "execution_id", e.ID, "code", code)
+			slog.WarnContext(ctx, "execution.still_uncertain", logAttrs(e, obs.AttrStatus, "uncertain", "code", code)...)
 			return logIgnored(ok, err, "still uncertain")
 		}
 		if e.Attempts < w.cfg.MaxAttempts {
 			attempt(models.AttemptFailed, code, message)
 			delay := withJitter(w.retryDelay(e.Attempts))
 			ok, err := w.store.Requeue(wctx, e.ID, cl.Owner, delay, code, message)
-			slog.Warn("execution.retry", "execution_id", e.ID, "attempt", e.Attempts, "retry_in", delay, "code", code)
+			slog.WarnContext(ctx, "execution.retry", logAttrs(e, obs.AttrAttempt, e.Attempts, "retry_in", delay, "code", code)...)
 			return logIgnored(ok, err, "requeue")
 		}
 		message = fmt.Sprintf("Gagal setelah %d percobaan. %s", e.Attempts, message)
@@ -168,6 +209,6 @@ func (w *Worker) finalize(ctx context.Context, cl *Claimed, batches int, rows in
 	}
 	attempt(models.AttemptFailed, code, message)
 	ok, err := w.store.Finish(wctx, e.ID, cl.Owner, status, code, message, batches, rows)
-	slog.Warn("execution.finished", "execution_id", e.ID, "status", string(status), "code", code, "batches", batches)
+	slog.WarnContext(ctx, "execution.finished", logAttrs(e, obs.AttrStatus, string(status), "code", code, "batches", batches)...)
 	return logIgnored(ok, err, string(status))
 }

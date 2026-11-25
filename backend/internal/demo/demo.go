@@ -33,13 +33,14 @@ const targetPassword = "platform_app"
 
 type group struct {
 	name, description string
+	leader            string
 	members           []string
 	grants            map[string]authz.Level
 }
 
 var groups = []group{
-	{"Tim Developer", "Menulis dan menjalankan migration.", []string{"developer"}, map[string]authz.Level{"toko": authz.Edit, "kampus": authz.View}},
-	{"Tim Reviewer", "Meninjau schema dan data.", []string{"reviewer"}, map[string]authz.Level{"toko": authz.View, "kampus": authz.View}},
+	{"Tim Developer", "Menulis dan menjalankan migration.", "developer", []string{"developer"}, map[string]authz.Level{"toko": authz.Edit, "kampus": authz.View}},
+	{"Tim Reviewer", "Meninjau schema dan data.", "reviewer", []string{"reviewer"}, map[string]authz.Level{"toko": authz.View, "kampus": authz.View}},
 }
 
 // Seed is idempotent: it creates what is missing and resets demo passwords, connection passwords and grant levels.
@@ -96,6 +97,9 @@ func Seed(db *gorm.DB, cipher *dbconn.Cipher) error {
 				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&models.GroupMember{GroupID: row.ID, UserID: users[m]}).Error; err != nil {
 					return err
 				}
+			}
+			if err := tx.Model(&row).Update("leader_id", users[g.leader]).Error; err != nil {
+				return err
 			}
 			for name, level := range g.grants {
 				grant := models.Grant{GroupID: row.ID, DatabaseID: databases[name], Level: int16(level)}

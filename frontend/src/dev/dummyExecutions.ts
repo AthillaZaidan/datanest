@@ -155,6 +155,8 @@ export function snapshot(name: string, elapsedMs: number, startedAt = 0): Execut
     errorMessage: p.error?.message,
     sqlExecuted: p.startedAtMs === undefined ? null : s.mode === 'batch' ? SQL_BATCH : SQL_NORMAL,
     approvers: p.approvers ?? approvers(true),
+    blockedGroups: [],
+    permissions: { canApprove: p.status === 'pending_review', canReject: p.status === 'pending_review', canCancel: false, canWithdraw: false },
     requestedBy: 'developer',
     createdAt: new Date(startedAt).toISOString(),
     startedAt: iso(p.startedAtMs),

@@ -62,6 +62,7 @@ func TestCodesAreUnique(t *testing.T) {
 		ErrMigrationRunning, ErrMigrationNotDraft, ErrExecutionStateConflict, ErrRollbackNotAllowed,
 		ErrForwardNotAllowed, ErrRevisionConflict, ErrUnsupportedMediaType,
 		ErrInternal, ErrNotImplemented, ErrTargetDBUnavailable, ErrTargetDBTimeout,
+		ErrNotAnApprover, ErrGroupWithoutLeader,
 	}
 	seen := map[string]bool{}
 	for _, e := range all {

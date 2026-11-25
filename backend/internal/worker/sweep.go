@@ -7,18 +7,21 @@ import (
 	"time"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 	"github.com/AthillaZaidan/datanest/backend/internal/queue"
 )
 
 type SweepResult struct {
 	Dead      int
 	Published int
+	Promoted  int
 }
 
 func (w *Worker) Dispatch(ctx context.Context, e *models.MigrationExecution) error {
 	if w.Publisher == nil {
 		return errors.New("worker: no publisher configured")
 	}
+	ctx = obs.WithTraceparent(obs.WithCorrelationID(ctx, e.CorrelationID), e.Traceparent)
 	job := queue.Job{ExecutionID: e.ID, Traceparent: e.Traceparent, CorrelationID: e.CorrelationID}
 	if err := w.Publisher.Publish(ctx, job); err != nil {
 		return err
@@ -36,6 +39,14 @@ func (w *Worker) Sweep(ctx context.Context) (SweepResult, error) {
 		slog.Warn("execution.worker_lost", "execution_id", id)
 	}
 	res.Dead = len(dead)
+
+	if w.PromoteApproved != nil {
+		promoted, err := w.PromoteApproved(ctx)
+		if err != nil {
+			slog.WarnContext(ctx, "approval.promote_failed", obs.AttrError, err)
+		}
+		res.Promoted = promoted
+	}
 
 	due, err := w.store.DueForPublish(ctx, w.cfg.RepublishAfter, 100)
 	if err != nil {

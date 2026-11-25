@@ -2,12 +2,14 @@ package migration
 
 import (
 	"context"
+	"log/slog"
 
 	"gorm.io/gorm"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration/sqlguard"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 	"github.com/AthillaZaidan/datanest/backend/internal/position"
 )
 
@@ -57,5 +59,7 @@ func (s *Service) Submit(ctx context.Context, userID, migrationID uint, kind mod
 	if err != nil {
 		return nil, err
 	}
+	slog.InfoContext(ctx, obs.EventExecutionRequested, obs.AttrActorID, u.ID, obs.AttrActor, u.Username, obs.AttrMigrationID, m.ID,
+		obs.AttrExecutionID, out.ID, obs.AttrDatabaseID, out.DatabaseID, "kind", string(out.Kind), obs.AttrStatus, string(out.Status))
 	return &out, nil
 }

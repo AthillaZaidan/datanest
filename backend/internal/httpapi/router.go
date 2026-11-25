@@ -3,9 +3,12 @@ package httpapi
 
 import (
 	"github.com/AthillaZaidan/datanest/backend/internal/admin"
+	"github.com/AthillaZaidan/datanest/backend/internal/approval"
 	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
 	"github.com/AthillaZaidan/datanest/backend/internal/execution"
-	"log"
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
+	"github.com/AthillaZaidan/datanest/backend/internal/reqctx"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -29,6 +32,7 @@ type Deps struct {
 	Explorer     *explorer.Service
 	Migrations   *migration.Service
 	Executions   *execution.Service
+	Approvals    *approval.Service
 }
 
 func NewRouter(d Deps) *gin.Engine {
@@ -62,6 +66,13 @@ func NewRouter(d Deps) *gin.Engine {
 		submitExec = submissionHandlers{migrations: d.Migrations, executions: d.Executions}.submit
 	}
 
+	approve, reject, cancelExec, withdraw, pending := notImplemented, notImplemented, notImplemented, notImplemented, notImplemented
+	if d.Approvals != nil && d.Executions != nil {
+		h := approvalHandlers{approvals: d.Approvals, executions: d.Executions}
+		approve, reject, cancelExec, withdraw = h.act(h.approve), h.act(h.reject), h.act(h.cancel), h.act(h.withdraw)
+		pending = h.pending
+	}
+
 	ah := adminHandlers{svc: d.Admin}
 	dh := databaseHandlers{svc: d.Databases}
 	adminHandler := func(h gin.HandlerFunc) gin.HandlerFunc {
@@ -78,7 +89,7 @@ func NewRouter(d Deps) *gin.Engine {
 	}
 	r := gin.New()
 	r.Use(gin.Recovery())
-	r.Use(RequestLogger(log.Default()))
+	r.Use(RequestLogger())
 	if d.Security != nil {
 		r.Use(d.Security)
 	}
@@ -108,6 +119,8 @@ func NewRouter(d Deps) *gin.Engine {
 	admin.GET("/groups/:groupId/members", adminHandler(ah.members))
 	admin.PUT("/groups/:groupId/members/:userId", adminHandler(ah.member))
 	admin.DELETE("/groups/:groupId/members/:userId", adminHandler(ah.member))
+	admin.PUT("/groups/:groupId/leader", adminHandler(ah.leader))
+	admin.DELETE("/groups/:groupId/leader", adminHandler(ah.leader))
 	admin.GET("/groups/:groupId/grants", adminHandler(ah.grants))
 	admin.PUT("/groups/:groupId/grants/:databaseId", adminHandler(ah.grant))
 	admin.DELETE("/groups/:groupId/grants/:databaseId", adminHandler(ah.grant))
@@ -140,6 +153,11 @@ func NewRouter(d Deps) *gin.Engine {
 	user.GET("/databases/:databaseId/executions", historyExec)
 	user.POST("/migrations/:migrationId/executions", submitExec)
 	user.GET("/executions/:executionId", getExec)
+	user.POST("/executions/:executionId/approve", approve)
+	user.POST("/executions/:executionId/reject", reject)
+	user.POST("/executions/:executionId/cancel", cancelExec)
+	user.POST("/executions/:executionId/withdraw", withdraw)
+	user.GET("/approvals/pending", pending)
 
 	return r
 }
@@ -147,6 +165,13 @@ func NewRouter(d Deps) *gin.Engine {
 // RespondError writes err in the standard error format and aborts the request.
 func RespondError(c *gin.Context, err error) {
 	status, body := apperr.Response(err)
+	if body.Error.Code == apperr.ErrForbidden.Code || body.Error.Code == apperr.ErrNotAnApprover.Code {
+		attrs := []any{obs.AttrMethod, c.Request.Method, obs.AttrPath, c.Request.URL.Path, "code", body.Error.Code}
+		if userID, ok := reqctx.UserID(c); ok {
+			attrs = append(attrs, obs.AttrActorID, userID)
+		}
+		slog.WarnContext(c.Request.Context(), obs.EventAuthzDenied, attrs...)
+	}
 	c.AbortWithStatusJSON(status, body)
 }
 

@@ -6,9 +6,11 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"log/slog"
 	"strings"
 	"unicode/utf8"
 )
@@ -197,18 +199,26 @@ func (s *Service) Role(ctx context.Context, a, id uint, role string, add bool) e
 }
 
 type GroupView struct {
-	ID          uint   `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	ID             uint   `json:"id"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	LeaderID       *uint  `json:"leaderId"`
+	LeaderUsername string `json:"leaderUsername"`
 }
 
-func gv(g models.Group) GroupView { return GroupView{g.ID, g.Name, g.Description} }
+func gv(g models.Group) GroupView {
+	v := GroupView{ID: g.ID, Name: g.Name, Description: g.Description, LeaderID: g.LeaderID}
+	if g.Leader != nil {
+		v.LeaderUsername = g.Leader.Username
+	}
+	return v
+}
 func (s *Service) Groups(ctx context.Context, a uint) ([]GroupView, error) {
 	if e := s.require(ctx, a); e != nil {
 		return nil, e
 	}
 	var gs []models.Group
-	if e := s.repo.DB.WithContext(ctx).Order("id").Find(&gs).Error; e != nil {
+	if e := s.repo.DB.WithContext(ctx).Preload("Leader").Order("id").Find(&gs).Error; e != nil {
 		return nil, e
 	}
 	out := make([]GroupView, 0, len(gs))
@@ -222,7 +232,7 @@ func (s *Service) Group(ctx context.Context, a, id uint) (GroupView, error) {
 		return GroupView{}, e
 	}
 	var g models.Group
-	e := s.repo.DB.WithContext(ctx).First(&g, id).Error
+	e := s.repo.DB.WithContext(ctx).Preload("Leader").First(&g, id).Error
 	return gv(g), mapped(e, false)
 }
 func (s *Service) CreateGroup(ctx context.Context, a uint, name, description string) (GroupView, error) {
@@ -310,12 +320,59 @@ func (s *Service) Member(ctx context.Context, a, gid, uid uint, add bool) error 
 			changed = res.RowsAffected > 0
 			return res.Error
 		}
+		// A leader must be a member.
+		if e := tx.Model(&models.Group{}).Where("id = ? AND leader_id = ?", gid, uid).Update("leader_id", nil).Error; e != nil {
+			return e
+		}
 		return tx.Where("group_id = ? AND user_id = ?", gid, uid).Delete(&models.GroupMember{}).Error
 	})
 	if e == nil && changed {
 		s.sessions.MarkNeedsRotation(uid)
 	}
 	return mapped(e, false)
+}
+
+var errLeaderNotMember = apperr.ErrValidation.WithMessage("Leader harus anggota group.").
+	WithDetails(map[string]string{"userId": "bukan anggota group"})
+
+func (s *Service) SetLeader(ctx context.Context, a, gid, userID uint) (GroupView, error) {
+	if e := s.require(ctx, a); e != nil {
+		return GroupView{}, e
+	}
+	e := s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var g models.Group
+		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&g, gid).Error; e != nil {
+			return mapped(e, false)
+		}
+		var n int64
+		if e := tx.Model(&models.GroupMember{}).Where("group_id = ? AND user_id = ?", gid, userID).Count(&n).Error; e != nil {
+			return e
+		}
+		if n == 0 {
+			return errLeaderNotMember
+		}
+		return tx.Model(&g).Update("leader_id", userID).Error
+	})
+	if e != nil {
+		return GroupView{}, e
+	}
+	slog.InfoContext(ctx, obs.EventLeaderChanged, obs.AttrActorID, a, obs.AttrGroupID, gid, obs.AttrLeader, userID)
+	return s.Group(ctx, a, gid)
+}
+
+func (s *Service) ClearLeader(ctx context.Context, a, gid uint) (GroupView, error) {
+	if e := s.require(ctx, a); e != nil {
+		return GroupView{}, e
+	}
+	res := s.repo.DB.WithContext(ctx).Model(&models.Group{}).Where("id = ?", gid).Update("leader_id", nil)
+	if res.Error != nil {
+		return GroupView{}, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return GroupView{}, apperr.ErrNotFound
+	}
+	slog.InfoContext(ctx, obs.EventLeaderChanged, obs.AttrActorID, a, obs.AttrGroupID, gid, obs.AttrLeader, nil)
+	return s.Group(ctx, a, gid)
 }
 
 type GrantView struct {
@@ -383,6 +440,10 @@ func (s *Service) Grant(ctx context.Context, a, gid, did uint, level string, add
 		}
 		return nil
 	})
+	if e == nil {
+		slog.InfoContext(ctx, obs.EventGrantChanged, obs.AttrActorID, a, obs.AttrGroupID, gid, obs.AttrDatabaseID, did,
+			obs.AttrAction, map[bool]string{true: "set", false: "revoke"}[add], "level", level)
+	}
 	if e == nil && raised {
 		for _, u := range users {
 			s.sessions.MarkNeedsRotation(u)

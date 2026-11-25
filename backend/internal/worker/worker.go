@@ -90,9 +90,10 @@ func (c Config) withDefaults() Config {
 }
 
 type Worker struct {
-	Hooks      Hooks
-	Revalidate func(ctx context.Context, e *models.MigrationExecution) error
-	Publisher  Publisher
+	Hooks           Hooks
+	Revalidate      func(ctx context.Context, e *models.MigrationExecution) error
+	Publisher       Publisher
+	PromoteApproved func(ctx context.Context) (int, error)
 
 	cfg     Config
 	store   *execution.Store

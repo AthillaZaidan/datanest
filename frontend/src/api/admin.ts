@@ -1,6 +1,6 @@
 import { api, send } from './client'
 export type User = { id: number; username: string; isAdmin: boolean }
-export type Group = { id: number; name: string; description: string }
+export type Group = { id: number; name: string; description: string; leaderId: number | null; leaderUsername: string }
 export type Grant = { groupId: number; databaseId: number; level: 'VIEW' | 'EDIT' }
 export type Database = { id: number; name: string; host: string; port: number; dbName: string; username: string; sslMode: string; hasPassword: boolean; myLevel?: 'VIEW' | 'EDIT'; currentVersion: number }
 export type ConnectionInput = { name: string; host: string; port: number; dbName: string; username: string; password: string; sslMode: string }

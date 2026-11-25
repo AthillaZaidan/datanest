@@ -4,7 +4,7 @@ import { message, read, write } from '../../api/admin'
 import type { Database, Grant, Group, User } from '../../api/admin'
 import { useAdmin } from '../../components/admin/useAdmin'
 import { PencilIcon, TrashIcon } from '../../components/icons'
-import { Alert, Avatar, Empty, Field, LevelPill, Loading, PageHeader, Section } from '../../components/kit'
+import { Alert, Avatar, Empty, Field, LevelPill, Loading, PageHeader, Pill, Section } from '../../components/kit'
 import { ui } from '../../components/ui'
 import { useCrumbs } from '../../context/crumbs'
 
@@ -27,6 +27,7 @@ export default function Groups() {
   const [members, setMembers] = useState<User[]>([])
   const [grants, setGrants] = useState<Grant[]>([])
   const [uid, setUid] = useState('')
+  const [leaderId, setLeaderId] = useState('')
   const [did, setDid] = useState('')
   const [level, setLevel] = useState<'VIEW' | 'EDIT'>('VIEW')
 
@@ -55,7 +56,10 @@ export default function Groups() {
   }, [details])
 
   async function change(fn: () => Promise<unknown>) {
-    if (await s.act(fn)) await details()
+    if (await s.act(fn)) {
+      setLeaderId('')
+      await details()
+    }
   }
   function resetForm() {
     setEdit(null)
@@ -106,6 +110,7 @@ export default function Groups() {
                     <button className="min-w-0 flex-1 rounded-lg px-2.5 py-2 text-left focus-visible:outline-2 focus-visible:outline-accent" onClick={() => setSelected(g.id)} aria-current={g.id === selected ? 'true' : undefined}>
                       <span className="block truncate text-sm font-medium">{g.name}</span>
                       {g.description && <span className="block truncate text-xs text-muted">{g.description}</span>}
+                      <span className="mt-0.5 block text-xs text-muted">{g.leaderId === null ? 'Belum ada leader' : `Leader: ${g.leaderUsername}`}</span>
                     </button>
                     <button
                       className={ui.buttonSmGhost}
@@ -146,6 +151,36 @@ export default function Groups() {
           <Empty>Pilih group di sebelah kiri untuk mengatur anggota dan grant database.</Empty>
         ) : (
           <div className="min-w-0 space-y-10">
+            <Section title="Leader" aside={group?.leaderId === null ? <Pill tone="warning">Belum ada</Pill> : undefined}>
+              {group?.leaderId === null && (
+                <Alert tone="warning">
+                  Group tanpa leader tidak dapat menyetujui perubahan. Selama ada group seperti ini dengan akses ke sebuah database,
+                  semua perubahan di database itu tertahan di tahap review.
+                </Alert>
+              )}
+              <form
+                className="flex flex-wrap items-center gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  void change(() => write('PUT', `/admin/groups/${selected}/leader`, { userId: Number(leaderId) }))
+                }}
+              >
+                <select className={`${ui.select} min-w-48 flex-1 sm:max-w-80`} required value={leaderId} onChange={(e) => setLeaderId(e.target.value)} aria-label="Leader">
+                  <option value="">{group?.leaderUsername ? `Ganti leader (sekarang ${group.leaderUsername})` : 'Pilih leader'}</option>
+                  {members.map((u) => (
+                    <option key={u.id} value={u.id}>{u.username}</option>
+                  ))}
+                </select>
+                <button className={ui.buttonPrimary} disabled={s.busy || members.length === 0}>Tetapkan leader</button>
+                {group?.leaderId !== null && (
+                  <button type="button" className={ui.buttonDanger} disabled={s.busy} onClick={() => void change(() => write('DELETE', `/admin/groups/${selected}/leader`))}>
+                    Hapus leader
+                  </button>
+                )}
+              </form>
+              <p className={`${ui.small} mt-2`}>Satu group satu leader, dan leader harus anggota group. Seorang leader boleh memimpin beberapa group.</p>
+            </Section>
+
             <Section title={<>Anggota {group?.name}</>} aside={<span className="num">{members.length}</span>}>
               <form
                 className="mb-2 flex flex-wrap gap-2"

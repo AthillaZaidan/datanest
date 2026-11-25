@@ -92,8 +92,8 @@ Dibuat oleh `go run ./cmd/seed`:
 | Username | Password | Akses |
 | --- | --- | --- |
 | `demo-admin` | `demoadmin123` | Platform Admin. Tidak masuk group mana pun, jadi tidak bisa membuka database: akses database selalu lewat grant group. |
-| `developer` | `developer123` | Group Tim Developer: EDIT `toko`, VIEW `kampus`. Bisa membuat dan menjalankan migration di `toko`. |
-| `reviewer` | `reviewer123` | Group Tim Reviewer: VIEW `toko` dan `kampus`. Hanya membaca schema, data, dan riwayat. |
+| `developer` | `developer123` | Group Tim Developer: EDIT `toko`, VIEW `kampus`. Bisa membuat dan mengajukan migration di `toko`. Leader Tim Developer. |
+| `reviewer` | `reviewer123` | Group Tim Reviewer: VIEW `toko` dan `kampus`. Membaca schema, data, dan riwayat, dan menyetujui pengajuan sebagai leader Tim Reviewer. |
 
 Daftar akun di halaman login hanya tampil di `bun run dev` atau pada build dengan `VITE_SHOW_DEMO_ACCOUNTS=true` (daftarnya ada di `frontend/src/dev/demoAccounts.ts` dan harus sama dengan `backend/internal/demo/demo.go`). Jangan jalankan seed ke database platform sungguhan, dan jangan membangun frontend dengan flag itu di luar demo lokal.
 
@@ -101,7 +101,10 @@ Alur demo singkat:
 
 1. Masuk sebagai `reviewer`: buka `toko`, lihat struktur dan data table. Tombol **Migration baru** tidak muncul.
 2. Masuk sebagai `developer`: buka `toko`, **Migration baru**, tulis SQL (misalnya `ALTER TABLE products ADD COLUMN sku text;`), **Simpan draft**, lalu **Jalankan**. Versi schema naik dan kolom baru terlihat di tab Struktur. SQL yang salah tercatat sebagai Gagal dan di-rollback.
-3. Masuk sebagai `demo-admin`: buka **Groups** untuk mengatur anggota dan grant, **Koneksi database** untuk menambah atau menguji koneksi. Membuka `toko` ditolak sampai `demo-admin` dimasukkan ke group yang punya grant.
+3. Alur review: `developer` mengajukan migration (status **Menunggu review**), lalu `developer` dan `reviewer` sama-sama membuka
+   **Antrean review** dan menekan **Setujui** (keduanya leader, jadi keduanya harus setuju). Setelah yang terakhir menyetujui, status
+   berubah **Disetujui**, **Dalam antrean**, lalu worker (`go run ./cmd/worker`) menjalankannya. `reviewer` juga bisa **Tolak**.
+4. Masuk sebagai `demo-admin`: buka **Groups** untuk mengatur anggota dan grant, **Koneksi database** untuk menambah atau menguji koneksi. Membuka `toko` ditolak sampai `demo-admin` dimasukkan ke group yang punya grant.
 
 ## Isi file .env
 
@@ -126,6 +129,8 @@ Backend membaca `backend/.env` lalu `.env` di root repo; variabel environment ya
 | `MIGRATION_LOCK_TIMEOUT` | `5s` | `lock_timeout` saat migration berjalan. |
 | `MIGRATION_STATEMENT_TIMEOUT` | `60s` | `statement_timeout` per statement migration. |
 | `MIGRATION_EXEC_TIMEOUT` | `2m` | Batas total satu eksekusi migration. |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, atau `error`. Log berbentuk JSON di stdout. |
+| `TRACE_EXPORTER` | `console` | `console` menulis span ke stderr; `none` mematikan tracing. |
 | `TEST_PLATFORM_DSN`, `TEST_TARGET_DSN` | ke `test-pg` | Hanya untuk integration test. |
 
 Port host database bisa diubah dengan `PLATFORM_PG_PORT`, `TARGET_PG_PORT`, dan `TEST_PG_PORT` saat `docker compose up`; sesuaikan DSN-nya. Koneksi demo dari seed selalu menunjuk `localhost:15433`, jadi bila `TARGET_PG_PORT` diubah, perbarui port koneksi di halaman Koneksi database.
@@ -481,6 +486,7 @@ Semua endpoint berada di bawah `/api` dan memakai JSON `camelCase`; waktu dalam 
 | Auth | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me` |
 | Admin | `/admin/users`, `/admin/users/:userId`, `/admin/users/:userId/roles/:role`, `/admin/groups`, `/admin/groups/:groupId`, `/admin/groups/:groupId/members/:userId`, `/admin/groups/:groupId/grants/:databaseId`, `/admin/databases`, `/admin/databases/:databaseId`, `/admin/databases/test`, `/admin/databases/:databaseId/test` |
 | Explorer | `GET /databases`, `GET /databases/:databaseId`, `.../schemas`, `.../schemas/:schema/tables`, `.../tables/:table`, `.../tables/:table/rows?page=&pageSize=` |
+| Review | `POST /migrations/:migrationId/executions` (ajukan), `GET /executions/:executionId`, `POST /executions/:executionId/approve`, `/reject`, `/cancel`, `/withdraw`, `GET /approvals/pending`, `PUT/DELETE /admin/groups/:groupId/leader` |
 | Migration | `GET/POST /databases/:databaseId/migrations?status=`, `GET/PATCH/DELETE /migrations/:migrationId`, `POST /migrations/:migrationId/execute`, `POST /migrations/:migrationId/duplicate`, `POST /migrations/:migrationId/explain?analyze=` |
 
 Setiap error memakai bentuk yang sama:
@@ -493,9 +499,9 @@ Setiap error memakai bentuk yang sama:
 | --- | --- |
 | 400 | `VALIDATION_ERROR` (dengan `details` per field), `TRANSACTION_CONTROL_NOT_ALLOWED` |
 | 401 | `UNAUTHENTICATED`, `INVALID_CREDENTIALS` |
-| 403 | `FORBIDDEN`, `CSRF_INVALID`, `ORIGIN_NOT_ALLOWED` |
+| 403 | `FORBIDDEN`, `NOT_AN_APPROVER`, `CSRF_INVALID`, `ORIGIN_NOT_ALLOWED` |
 | 404 | `NOT_FOUND` |
-| 409 | `USERNAME_TAKEN`, `CONFLICT`, `LAST_ADMIN`, `MIGRATION_RUNNING`, `MIGRATION_NOT_DRAFT`, `REVISION_CONFLICT` |
+| 409 | `USERNAME_TAKEN`, `CONFLICT`, `LAST_ADMIN`, `MIGRATION_RUNNING`, `MIGRATION_NOT_DRAFT`, `REVISION_CONFLICT`, `EXECUTION_STATE_CONFLICT`, `GROUP_WITHOUT_LEADER` |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` |
 | 500 | `INTERNAL_ERROR` (tanpa detail internal; detailnya hanya di log) |
 | 502 / 504 | `TARGET_DB_UNAVAILABLE` / `TARGET_DB_TIMEOUT` |
@@ -610,3 +616,139 @@ kebenaran dibaca dari ledger.
 - Tidak ada dead-letter queue; execution yang gagal tetap tersimpan sebagai baris `failed` yang dapat dilihat dan di-forward ulang.
 - Tombol "Jalankan" M1 (`POST /api/migrations/:id/execute`) masih sinkron sampai alur pengajuan dan approval menggantikannya;
   eksekusi M1 tidak lewat antrean.
+
+### 16. Leader per group dan alur review (Milestone 2)
+
+Setiap pengajuan (run, forward, atau rollback) adalah satu baris `migration_executions` yang melewati
+`pending_review` → `approved` → `queued` sebelum worker menjalankannya. Status milik execution, bukan milik migration, supaya
+rollback dan forward juga wajib melewati review yang baru.
+
+**Leader.** Kolom `groups.leader_id` (boleh kosong): satu leader per group, harus anggota group, hanya Platform Admin yang
+mengatur (`PUT/DELETE /api/admin/groups/:groupId/leader`, halaman **Groups**). Seorang user boleh memimpin beberapa group. Bila
+leader keluar dari group atau user-nya dihapus, group menjadi tanpa leader.
+
+**Daftar penyetuju dihitung langsung** (bukan disalin saat pengajuan): `DISTINCT leader_id` dari semua group yang punya grant
+(VIEW atau EDIT) ke database itu. Seseorang yang memimpin dua group dihitung sekali. Karena dihitung ulang terus, berpindahnya
+leader langsung mengubah siapa yang harus setuju.
+
+**Persetujuan atas nama orang.** Table `migration_approvals` (`execution_id`, `user_id`, salinan `username`, `created_at`,
+`revoked_at`), append-only: mencabut persetujuan mengisi `revoked_at`, tidak menghapus baris. Persetujuan Sari tidak pindah ke
+Joko bila leader berganti; persetujuan orang yang sudah keluar dari daftar diabaikan. Syarat lolos: setiap orang di daftar live
+punya persetujuan yang belum dicabut.
+
+**Titik kunci.** Menyetujui, menolak, dan menarik berjalan dalam transaction yang mengunci baris execution, dan setiap transisi
+memakai `UPDATE ... WHERE status = <status sebelumnya>`, sehingga klik ganda atau dua leader yang menyetujui bersamaan
+menghasilkan tepat satu transisi. Saat persetujuan terakhir masuk, execution menjadi `approved`; langkah berikutnya mengecek
+daftar penyetuju sekali lagi dalam satu transaction. Bila ada penyetuju baru yang belum setuju, status kembali ke
+`pending_review`; bila lengkap, status menjadi `queued` (disimpan `correlation_id` dan `traceparent` request itu) lalu pesan
+dipublikasikan. Gagal publish tidak membatalkan apa pun: sweeper worker menerbitkan execution `queued` yang belum terbit, dan
+juga menuntaskan execution yang tertinggal di `approved` lebih dari 10 detik. Setelah `queued`, daftar tidak dihitung lagi.
+
+**Aksi dan hak.**
+
+| Aksi | Siapa | Dari status |
+| --- | --- | --- |
+| `approve` | leader di daftar penyetuju (level VIEW cukup; leader VIEW tetap tidak boleh membuat atau mengedit) | `pending_review` |
+| `reject` | leader di daftar penyetuju, alasan opsional | `pending_review`, `approved` |
+| `cancel` | pengaju | `pending_review`, `approved` |
+| `withdraw` (cabut persetujuan sendiri) | yang sudah menyetujui | `pending_review`, `approved` (kembali ke `pending_review`) |
+
+Yang bukan leader mendapat `403 NOT_AN_APPROVER`; yang tidak punya akses ke database mendapat `403 FORBIDDEN`; aksi pada status
+yang tidak sesuai mendapat `409 EXECUTION_STATE_CONFLICT`. Selama ada execution terbuka SQL resep tidak bisa diedit; migration
+yang ditolak atau ditarik tetap bisa diperbaiki dan diajukan lagi. SPA menampilkan tombol sesuai `permissions` dari server
+(hanya untuk UX), antrean di **Antrean review** (`GET /api/approvals/pending`, diperbarui tiap 10 detik), dan pengaturan leader
+di halaman **Groups**.
+
+**Asumsi dan risiko** (spek tidak mengatur):
+- **Group tanpa leader gagal tertutup.** Selama ada group dengan grant ke sebuah database yang belum punya leader, perubahan
+  di database itu tidak bisa disetujui (`409 GROUP_WITHOUT_LEADER`, dan halaman eksekusi menulis "Group X belum punya leader").
+  Dipilih daripada melewati group itu, karena menghapus seorang leader akan diam-diam menghilangkan veto timnya. Seed demo
+  menetapkan leader (`developer` untuk Tim Developer, `reviewer` untuk Tim Reviewer); group dari Milestone 1 lain harus diberi
+  leader oleh admin.
+- **Menyetujui pengajuan sendiri diperbolehkan.** Spek diam soal ini, dan melarangnya membuat database yang seluruh timnya
+  dipimpin satu orang tidak bisa diubah sama sekali.
+- **Platform Admin dapat mengubah leader dan grant**, sehingga secara teknis dapat mengatur siapa yang menyetujui (admin yang
+  menempatkan dirinya ke group dengan grant lalu menjadi leader). Ini tidak dicegah, hanya dicatat: setiap perubahan grant
+  dan leader masuk log terstruktur (`grant.changed`, `leader.changed`) dengan pelaku dan database.
+- **`POST /api/migrations/:id/execute` dari Milestone 1 masih ada** dan menjalankan migration langsung tanpa review dan tanpa
+  antrean. SPA tidak memakainya lagi (tombol di editor mengajukan lewat `POST /migrations/:id/executions`), tetapi pemanggil
+  API langsung dengan hak EDIT masih bisa melewati approval sampai route itu dihapus.
+
+### 17. Log terstruktur, masking, dan tracing (Milestone 2)
+
+**Log.** Semua log berbentuk JSON satu baris di stdout (`log/slog`). Atribut tetap: `time`, `level`, `event`, `actor_id`,
+`actor`, `database_id`, `status`, `correlation_id`, `trace_id`, `span_id`. Untuk SQL: `query`, `duration_ms`, `rows`, `error`,
+`sqlstate`. Untuk eksekusi: `migration_id`, `execution_id`, `job_id` (sama dengan execution ID), `attempt`, `batch_no`; setiap baris worker juga memuat `actor_id` dan `actor` (pengaju). Nama event berbentuk `area.aksi`:
+`http.request`, `auth.login`, `authz.denied`, `explorer.query`, `execution.approved`, `execution.rejected`,
+`execution.canceled`, `queue.published`, `lock.acquired`, `lock.lost`, `sql.start`, `sql.result`, `sql.commit`, `sql.rollback`,
+`recovery.check`, `grant.changed`, `leader.changed`. Mulai, hasil, dan commit atau rollback sebuah SQL dicatat sebagai baris terpisah, masing-masing dengan `status`. Setiap query explorer ke database target dicatat sebagai satu baris `explorer.query` berisi teks query (dimasking), durasi, dan status; jumlah row tidak tersedia di jalur itu, jadi tidak dicatat. Pengajuan eksekusi dicatat sebagai `execution.requested`. Nama event dan atribut ada di satu tempat, `backend/internal/obs`.
+
+**Correlation ID** dibuat server untuk setiap request API (nilai dari klien diabaikan) dan dikirim balik di header
+`X-Request-ID`. Saat sebuah execution masuk antrean, ID itu disimpan di baris execution dan ikut di pesan; worker memakai ID
+yang sama, sehingga satu pengajuan dapat ditelusuri dari request sampai SQL-nya dengan `correlation_id`.
+
+**Masking** ada di satu tempat (`ReplaceAttr` pada handler `slog`): atribut berkunci `password`, `sid`, `session`, `csrf`,
+`token`, `authorization`, dan `cookie` (serta variannya) diganti `[REDACTED]`. Parameter query ikut dicatat sebagai
+atribut `params` (batas batch, atau limit dan offset pada explorer), dan teks error yang memuat `password=...` atau
+`user:password@` pada URL disamarkan. Pada atribut `query`, literal string
+(termasuk body dollar-quoted) diganti `'?'` dan komentar dibuang, memakai tokenizer yang sama dengan `sqlguard`. SQL yang
+persis tetap utuh di database (`sql_executed`), hanya log yang dimasking. **Batasan:** literal angka tidak dimasking, dan
+`WHERE id = 42` tampil apa adanya. Query string URL tidak pernah dicatat. Pesan dari `log.Printf` lama (misalnya error session
+store) ikut keluar sebagai JSON, tetapi sebagai teks bebas di atribut `event`, bukan atribut terstruktur.
+
+**Tracing.** OpenTelemetry SDK dengan exporter console (span ditulis ke stderr; `TRACE_EXPORTER=none` mematikannya). Setiap
+request yang mengubah data (`POST`, `PUT`, `PATCH`, `DELETE`) memulai trace dengan satu span bernama `METODE route`; request
+`GET` tidak diberi span karena SPA memanggilnya berulang untuk polling dan akan membanjiri keluaran. Trace berlanjut melewati
+antrean ke worker:
+
+| Span | Induk |
+| --- | --- |
+| `POST /api/executions/:executionId/approve` (span request) | (akar) |
+| `api.approve` | span request |
+| `queue.publish` | `api.approve` |
+| `worker.process` | `queue.publish` |
+| `lock.acquire` | `worker.process` |
+| `execute` | `worker.process` |
+| `batch[n]` (mode per-batch) | `execute` |
+| `sql.query` | `execute`, atau `batch[n]` |
+
+Setiap pesan membawa `traceparent` milik span `queue.publish`, sehingga worker menyambung ke penerbitan itu. Konteks `api.approve`
+juga disimpan di kolom `traceparent` pada execution; dipakai bila pesan tidak membawa konteks, dan oleh sweeper atau pemulihan
+yang menerbitkan pesan baru, supaya trace tetap menyambung. Karena itu satu persetujuan bisa menghasilkan lebih dari satu span
+`queue.publish` bila sweeper menerbitkan ulang sebelum penanda "sudah terbit" tertulis; pesan ganda aman karena klaim
+`queued → running` hanya dimenangkan satu pesan.
+
+Contoh nyata dari satu persetujuan (UPDATE sederhana yang dijalankan worker lewat RabbitMQ; keluaran asli dari integration test):
+
+```json
+{"time":"2026-11-25T18:13:58.2552001+07:00","level":"INFO","event":"http.request","method":"POST","path":"/api/executions/1/approve","status":200,"duration_ms":124,"actor_id":2,"trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"9d1a333ed7dd8c8f","correlation_id":"b2235169ada375e7"}
+{"time":"2026-11-25T18:13:58.1688993+07:00","level":"INFO","event":"execution.approved","actor_id":2,"actor":"reviewer","migration_id":1,"execution_id":1,"job_id":1,"database_id":1,"status":"approved","trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"6ff8da75d26af419","correlation_id":"b2235169ada375e7"}
+{"time":"2026-11-25T18:13:58.2451506+07:00","level":"INFO","event":"lock.acquired","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"actor_id":1,"actor":"developer","owner":"test/1","lock_token":1,"trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"22ff56b33eabb594","correlation_id":"b2235169ada375e7"}
+{"time":"2026-11-25T18:13:58.2758092+07:00","level":"INFO","event":"sql.start","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"actor_id":1,"actor":"developer","attempt":1,"batch_no":0,"status":"started","query":"UPDATE items SET tag = '?' WHERE qty = 0","trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"c544933e2e334450","correlation_id":"b2235169ada375e7"}
+{"time":"2026-11-25T18:13:58.2768433+07:00","level":"INFO","event":"sql.result","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"actor_id":1,"actor":"developer","attempt":1,"batch_no":0,"status":"ok","duration_ms":1,"rows":95,"trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"c544933e2e334450","correlation_id":"b2235169ada375e7"}
+{"time":"2026-11-25T18:13:58.2792848+07:00","level":"INFO","event":"sql.commit","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"actor_id":1,"actor":"developer","attempt":1,"batch_no":0,"status":"committed","rows":95,"trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"6c35be4bc387e1f1","correlation_id":"b2235169ada375e7"}
+```
+
+Perhatikan literal `'rahasia'` pada SQL aslinya sudah menjadi `'?'` di log, dan `trace_id` serta `correlation_id` sama dari
+request sampai commit (`correlation_id` sama dengan header `X-Request-ID` respons). Baris worker membawa `actor` (pengaju),
+`migration_id`, dan `job_id`.
+
+Keluaran exporter console untuk dua span dari trace yang sama (`75f9bdfe27653dfb6d240ff0876f34c9`); span lain tersusun seperti tabel di bawahnya:
+
+```json
+{"Name":"POST /api/executions/:executionId/approve","SpanContext":{"TraceID":"75f9bdfe27653dfb6d240ff0876f34c9","SpanID":"9d1a333ed7dd8c8f","TraceFlags":"01","TraceState":"","Remote":false},"Parent":{"TraceID":"00000000000000000000000000000000","SpanID":"0000000000000000","TraceFlags":"00","TraceState":"","Remote":false},"SpanKind":1,"StartTime":"2026-11-25T18:13:58.1302448+07:00","EndTime":"2026-11-25T18:13:58.2552001+07:00","Attributes":[{"Key":"method","Value":{"Type":"STRING","Value":"POST"}},{"Key":"http.status_code","Value":{"Type":"INT64","Value":200}}],"Events":null,"Links":null,"Status":{"Code":"Unset","Description":""},"DroppedAttributes":0,"DroppedEvents":0,"DroppedLinks":0,"ChildSpanCount":1,"Resource":[{"Key":"service.name","Value":{"Type":"STRING","Value":"unknown_service:worker.test.exe"}},{"Key":"telemetry.sdk.language","Value":{"Type":"STRING","Value":"go"}},{"Key":"telemetry.sdk.name","Value":{"Type":"STRING","Value":"opentelemetry"}},{"Key":"telemetry.sdk.version","Value":{"Type":"STRING","Value":"1.47.0"}}],"InstrumentationScope":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null},"InstrumentationLibrary":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null}}
+{"Name":"sql.query","SpanContext":{"TraceID":"75f9bdfe27653dfb6d240ff0876f34c9","SpanID":"c544933e2e334450","TraceFlags":"01","TraceState":"","Remote":false},"Parent":{"TraceID":"75f9bdfe27653dfb6d240ff0876f34c9","SpanID":"6c35be4bc387e1f1","TraceFlags":"01","TraceState":"","Remote":false},"SpanKind":1,"StartTime":"2026-11-25T18:13:58.2758092+07:00","EndTime":"2026-11-25T18:13:58.2768433+07:00","Attributes":null,"Events":null,"Links":null,"Status":{"Code":"Unset","Description":""},"DroppedAttributes":0,"DroppedEvents":0,"DroppedLinks":0,"ChildSpanCount":0,"Resource":[{"Key":"service.name","Value":{"Type":"STRING","Value":"unknown_service:worker.test.exe"}},{"Key":"telemetry.sdk.language","Value":{"Type":"STRING","Value":"go"}},{"Key":"telemetry.sdk.name","Value":{"Type":"STRING","Value":"opentelemetry"}},{"Key":"telemetry.sdk.version","Value":{"Type":"STRING","Value":"1.47.0"}}],"InstrumentationScope":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null},"InstrumentationLibrary":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null}}
+```
+
+| Span | span_id | induk |
+| --- | --- | --- |
+| `POST /api/executions/:executionId/approve` | `9d1a333ed7dd8c8f` | - |
+| `api.approve` | `6ff8da75d26af419` | `POST /api/executions/:executionId/approve` |
+| `queue.publish` | `3283229004820247` | `api.approve` |
+| `worker.process` | `22ff56b33eabb594` | `queue.publish` |
+| `lock.acquire` | `c7642825056b679c` | `worker.process` |
+| `execute` | `6c35be4bc387e1f1` | `worker.process` |
+| `sql.query` | `c544933e2e334450` | `execute` |
+
+Span yang gagal (`sql.query`, `execute`, dan `worker.process`) diberi status `Error` beserta pesan errornya, dan span request
+berstatus `Error` untuk respons 5xx.

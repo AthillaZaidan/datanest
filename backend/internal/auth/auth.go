@@ -4,6 +4,7 @@ package auth
 import (
 	"crypto/subtle"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 	"github.com/AthillaZaidan/datanest/backend/internal/reqctx"
 	"github.com/AthillaZaidan/datanest/backend/internal/session"
 )
@@ -53,6 +55,7 @@ func (s *Service) Login(c *gin.Context) {
 	}
 	u, err := s.Verify(input.Username, input.Password)
 	if err != nil {
+		slog.WarnContext(c.Request.Context(), obs.EventAuthLogin, obs.AttrActor, input.Username, obs.AttrStatus, "failed")
 		respond(c, err)
 		return
 	}
@@ -61,6 +64,7 @@ func (s *Service) Login(c *gin.Context) {
 		respond(c, apperr.ErrInternal)
 		return
 	}
+	slog.InfoContext(c.Request.Context(), obs.EventAuthLogin, obs.AttrActorID, u.ID, obs.AttrActor, u.Username, obs.AttrStatus, "success")
 	c.JSON(http.StatusOK, loginResponse{User: UserResponse{ID: u.ID, Username: u.Username, IsAdmin: admin}, CSRFToken: csrf})
 }
 

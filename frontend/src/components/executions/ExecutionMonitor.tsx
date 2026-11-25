@@ -1,5 +1,14 @@
+import { useState } from 'react'
 import { ApiError } from '../../api/client'
-import { type Execution, type ExecutionFetcher, getExecution } from '../../api/executions'
+import {
+  type Execution,
+  type ExecutionFetcher,
+  approveExecution,
+  cancelExecution,
+  getExecution,
+  rejectExecution,
+  withdrawApproval,
+} from '../../api/executions'
 import { type ExecutionWatch, useExecution } from '../../hooks/useExecution'
 import { formatTime } from '../../utils/format'
 import { Alert, Loading, Meta, Pill, Section } from '../kit'
@@ -64,6 +73,69 @@ function Progress({ execution: e }: { execution: Execution }) {
   )
 }
 
+function ReviewActions({ execution: e, onDone }: { execution: Execution; onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [rejecting, setRejecting] = useState(false)
+  const [reason, setReason] = useState('')
+  const p = e.permissions
+  if (!p.canApprove && !p.canReject && !p.canCancel && !p.canWithdraw) return null
+
+  async function run(action: () => Promise<unknown>) {
+    setBusy(true)
+    setError('')
+    try {
+      await action()
+      setRejecting(false)
+      setReason('')
+      onDone()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Aksi gagal diproses.')
+      onDone()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Section title="Review">
+      {error && <Alert>{error}</Alert>}
+      <div className="flex flex-wrap gap-2">
+        {p.canApprove && <button className={ui.buttonPrimary} disabled={busy} onClick={() => void run(() => approveExecution(e.id))}>Setujui</button>}
+        {p.canReject && !rejecting && <button className={ui.buttonDanger} disabled={busy} onClick={() => setRejecting(true)}>Tolak</button>}
+        {p.canWithdraw && <button className={ui.button} disabled={busy} onClick={() => void run(() => withdrawApproval(e.id))}>Cabut persetujuan saya</button>}
+        {p.canCancel && (
+          <button
+            className={ui.button}
+            disabled={busy}
+            onClick={() => {
+              if (confirm('Tarik pengajuan ini? Pengajuan yang ditarik tidak bisa dilanjutkan.')) void run(() => cancelExecution(e.id))
+            }}
+          >
+            Tarik pengajuan
+          </button>
+        )}
+      </div>
+      {rejecting && (
+        <form
+          className="mt-3 space-y-2"
+          onSubmit={(ev) => {
+            ev.preventDefault()
+            void run(() => rejectExecution(e.id, reason))
+          }}
+        >
+          <label className={ui.label} htmlFor="reject-reason">Alasan penolakan (opsional)</label>
+          <textarea id="reject-reason" className={`${ui.input} h-20 py-2`} maxLength={500} value={reason} onChange={(ev) => setReason(ev.target.value)} />
+          <div className="flex gap-2">
+            <button className={ui.buttonDanger} disabled={busy}>Tolak pengajuan</button>
+            <button type="button" className={ui.button} disabled={busy} onClick={() => setRejecting(false)}>Batal</button>
+          </div>
+        </form>
+      )}
+    </Section>
+  )
+}
+
 function PollNote({ watch }: { watch: ExecutionWatch }) {
   if (watch.stale) {
     return <Alert tone="warning">Koneksi ke server bermasalah. Menampilkan data terakhir dan mencoba lagi.</Alert>
@@ -99,16 +171,29 @@ export default function ExecutionMonitor({ executionId, fetcher = getExecution }
         </Alert>
       )}
 
+      {e.status === 'pending_review' && e.blockedGroups.length > 0 && (
+        <Alert tone="warning">
+          {e.blockedGroups.map((g) => `Group ${g.name}`).join(', ')} belum punya leader, sehingga perubahan ini tidak dapat
+          disetujui. Minta Platform Admin menetapkan leader di halaman Groups.
+        </Alert>
+      )}
+
       <Progress execution={e} />
 
-      <Section title="Penyetuju">
-        <dl>
-          {e.approvers.map((a) => (
-            <Meta key={a.userId} label={a.username}>
-              <Pill tone={a.approved ? 'positive' : 'neutral'}>{a.approved ? 'Sudah setuju' : 'Belum setuju'}</Pill>
-            </Meta>
-          ))}
-        </dl>
+      <ReviewActions execution={e} onDone={watch.refresh} />
+
+      <Section title="Penyetuju" aside={e.approvers.length || undefined}>
+        {e.approvers.length === 0 ? (
+          <p className={ui.muted}>Belum ada penyetuju. Group yang punya akses ke database ini belum punya leader.</p>
+        ) : (
+          <dl>
+            {e.approvers.map((a) => (
+              <Meta key={`${a.userId}-${a.username}`} label={a.username}>
+                <Pill tone={a.approved ? 'positive' : 'neutral'}>{a.approved ? 'Sudah setuju' : 'Belum setuju'}</Pill>
+              </Meta>
+            ))}
+          </dl>
+        )}
       </Section>
 
       <Section title="Percobaan" aside={e.attempts.length || undefined}>

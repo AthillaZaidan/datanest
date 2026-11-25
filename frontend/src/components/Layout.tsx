@@ -4,7 +4,7 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router'
 import { useAuth } from '../context/AuthContext'
 import { CrumbContext } from '../context/crumbs'
 import type { Crumb } from '../context/crumbs'
-import { CloseIcon, DatabaseIcon, LogoutIcon, MenuIcon, Mark, ServerIcon, UserIcon, UsersIcon } from './icons'
+import { CloseIcon, DatabaseIcon, InboxIcon, LogoutIcon, MenuIcon, Mark, ServerIcon, UserIcon, UsersIcon } from './icons'
 import { Avatar } from './kit'
 import { ui } from './ui'
 
@@ -41,6 +41,7 @@ function Nav({ isAdmin }: { isAdmin: boolean }) {
   return (
     <nav className="flex flex-col gap-0.5" aria-label="Navigasi utama">
       <NavItem to="/databases" icon={<DatabaseIcon />}>Databases</NavItem>
+      <NavItem to="/reviews" icon={<InboxIcon />}>Antrean review</NavItem>
       {isAdmin && (
         <>
           <p className="mt-6 mb-1.5 px-2.5 text-xs text-muted">Administrasi</p>

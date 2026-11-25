@@ -64,6 +64,8 @@ const (
 	DeleteMigration    Action = "delete_migration"
 	DuplicateMigration Action = "duplicate_migration"
 	ExecuteMigration   Action = "execute_migration"
+	// VIEW is enough: leadership is checked separately.
+	ApproveMigration Action = "approve_migration"
 )
 
 var required = map[Action]Level{
@@ -76,6 +78,7 @@ var required = map[Action]Level{
 	DeleteMigration:    Edit,
 	DuplicateMigration: Edit,
 	ExecuteMigration:   Edit,
+	ApproveMigration:   View,
 }
 
 func RequiredLevel(action Action) (level Level, ok bool) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,11 +16,13 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/AthillaZaidan/datanest/backend/internal/approval"
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/config"
 	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 	"github.com/AthillaZaidan/datanest/backend/internal/queue"
 	"github.com/AthillaZaidan/datanest/backend/internal/worker"
 )
@@ -51,6 +54,8 @@ func newWorker(db *gorm.DB, targets dbconn.TargetDBProvider, cfg *config.Config)
 		ExecTimeout:      cfg.Target.MigrationExecTimeout,
 	})
 	w.Revalidate = migrationService.Revalidate
+	approvals := approval.NewService(db, authz.New(db))
+	w.PromoteApproved = func(ctx context.Context) (int, error) { return approvals.PromoteStale(ctx, 10*time.Second) }
 	return w
 }
 
@@ -63,6 +68,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	shutdownObs, err := obs.Setup(cfg.LogLevel, cfg.TraceExporter, os.Stdout, os.Stderr)
+	if err != nil {
+		return err
+	}
+	defer shutdownObs(context.Background())
 	if cfg.AMQPURL == "" {
 		return errors.New("AMQP_URL is required to run the worker")
 	}
@@ -96,6 +106,6 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("worker %d slots, queue %s", cfg.Worker.Concurrency, queue.JobsQueue)
+	slog.Info("worker.started", "slots", cfg.Worker.Concurrency, "queue", queue.JobsQueue)
 	return w.Serve(ctx, cfg.AMQPURL, cfg.Worker.SweepInterval)
 }
