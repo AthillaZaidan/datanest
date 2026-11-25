@@ -260,6 +260,7 @@ type snapshot struct {
 	state    position.State
 	versions map[uint]int
 	current  int
+	last     map[uint]LastExecution
 }
 
 func (s *Service) position(ctx context.Context, databaseID uint) (snapshot, error) {
@@ -267,7 +268,28 @@ func (s *Service) position(ctx context.Context, databaseID uint) (snapshot, erro
 	if err != nil {
 		return snapshot{}, err
 	}
-	return snapshot{state: st, versions: versions, current: position.ActiveVersion(st, versions)}, nil
+	last, err := s.lastExecutions(ctx, databaseID)
+	if err != nil {
+		return snapshot{}, err
+	}
+	return snapshot{state: st, versions: versions, current: position.ActiveVersion(st, versions), last: last}, nil
+}
+
+func (s *Service) lastExecutions(ctx context.Context, databaseID uint) (map[uint]LastExecution, error) {
+	var rows []struct {
+		MigrationID uint
+		LastExecution
+	}
+	err := s.platform.WithContext(ctx).Raw(`SELECT DISTINCT ON (migration_id) migration_id, id, kind, status
+		FROM migration_executions WHERE database_id = ? ORDER BY migration_id, id DESC`, databaseID).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	last := make(map[uint]LastExecution, len(rows))
+	for _, r := range rows {
+		last[r.MigrationID] = r.LastExecution
+	}
+	return last, nil
 }
 
 func (s *Service) user(ctx context.Context, userID uint) (*models.User, error) {

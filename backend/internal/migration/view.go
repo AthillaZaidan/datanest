@@ -7,6 +7,17 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/position"
 )
 
+type LastExecution struct {
+	ID     uint                   `json:"id"`
+	Kind   models.ExecutionKind   `json:"kind"`
+	Status models.ExecutionStatus `json:"status"`
+}
+
+type PartialExecution struct {
+	ExecutionID uint                 `json:"executionId"`
+	Kind        models.ExecutionKind `json:"kind"`
+}
+
 // View is the API shape of a migration.
 type View struct {
 	ID         uint `json:"id"`
@@ -37,6 +48,10 @@ type View struct {
 	UpdatedAt    time.Time  `json:"updatedAt"`
 	StartedAt    *time.Time `json:"startedAt"`
 	FinishedAt   *time.Time `json:"finishedAt"`
+	// LastExecution is the migration's newest execution, whatever its status.
+	LastExecution *LastExecution `json:"lastExecution"`
+	// Partial is set when the database's unsettled partial execution belongs to this migration.
+	Partial *PartialExecution `json:"partial"`
 }
 
 func toView(m *models.Migration, p snapshot) View {
@@ -44,7 +59,7 @@ func toView(m *models.Migration, p snapshot) View {
 	if m.BaseVersion != nil {
 		base = *m.BaseVersion
 	}
-	return View{
+	v := View{
 		ID:                 m.ID,
 		DatabaseID:         m.DatabaseID,
 		Version:            m.Version,
@@ -70,6 +85,13 @@ func toView(m *models.Migration, p snapshot) View {
 		StartedAt:          m.StartedAt,
 		FinishedAt:         m.FinishedAt,
 	}
+	if last, ok := p.last[m.ID]; ok {
+		v.LastExecution = &last
+	}
+	if partial := p.state.Partial; partial != nil && partial.MigrationID == m.ID {
+		v.Partial = &PartialExecution{ExecutionID: partial.ExecutionID, Kind: partial.Kind}
+	}
+	return v
 }
 
 // userLabel marks deleted users so they are not confused with a new user of the same name.
