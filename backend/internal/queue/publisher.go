@@ -3,10 +3,15 @@ package queue
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strconv"
 	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 )
 
 var ErrNotConfirmed = errors.New("queue: the broker did not confirm the message")
@@ -26,6 +31,21 @@ func NewPublisher(url, queue string) *Publisher {
 }
 
 func (p *Publisher) Publish(ctx context.Context, job Job) error {
+	ctx, span := obs.Start(ctx, obs.SpanQueuePublish, attribute.Int(obs.AttrExecutionID, int(job.ExecutionID)))
+	defer span.End()
+	// The worker continues from this span; without an active span the stored context is kept.
+	if tp := obs.Traceparent(ctx); tp != "" {
+		job.Traceparent = tp
+	}
+	if err := p.publish(ctx, job); err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
+	slog.InfoContext(ctx, obs.EventQueuePublished, obs.AttrExecutionID, job.ExecutionID, "queue", p.queue)
+	return nil
+}
+
+func (p *Publisher) publish(ctx context.Context, job Job) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
