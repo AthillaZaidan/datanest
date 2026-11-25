@@ -44,6 +44,9 @@ type MigrationExecution struct {
 	Status ExecutionStatus `gorm:"size:16;not null;index;check:chk_executions_status,status IN ('pending_review', 'approved', 'queued', 'running', 'success', 'failed', 'partial', 'uncertain', 'rejected', 'canceled')"`
 	Mode   ExecutionMode   `gorm:"size:8;not null;default:normal;check:chk_executions_mode,mode IN ('normal', 'batch')"`
 
+	Version  *int
+	Revision int `gorm:"not null;default:0"`
+
 	SQLExecuted string `gorm:"column:sql_executed;type:text;not null"`
 
 	BatchSize   *int
