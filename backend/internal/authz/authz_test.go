@@ -18,6 +18,7 @@ func TestRequiredLevel(t *testing.T) {
 		DeleteMigration:    Edit,
 		DuplicateMigration: Edit,
 		ExecuteMigration:   Edit,
+		ApproveMigration:   View,
 	}
 	for action, want := range tests {
 		got, ok := RequiredLevel(action)
