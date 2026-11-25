@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, send } from './client'
 
 export type ExecutionStatus =
   | 'pending_review'
@@ -32,6 +32,10 @@ export type Attempt = {
 
 export type Approver = { userId: number; username: string; approved: boolean }
 
+export type Permissions = { canApprove: boolean; canReject: boolean; canCancel: boolean; canWithdraw: boolean }
+
+export type BlockedGroup = { id: number; name: string }
+
 export type Execution = {
   id: number
   migrationId: number
@@ -46,6 +50,8 @@ export type Execution = {
   errorMessage?: string
   sqlExecuted: string | null
   approvers: Approver[]
+  blockedGroups: BlockedGroup[]
+  permissions: Permissions
   requestedBy: string
   createdAt: string
   startedAt: string | null
@@ -64,6 +70,28 @@ export const pollDelayMs: Record<ExecutionStatus, number | null> = {
   rejected: null,
   canceled: null,
 }
+
+export type PendingReview = {
+  executionId: number
+  migrationId: number
+  databaseId: number
+  databaseName: string
+  kind: ExecutionKind
+  requestedBy: string
+  createdAt: string
+  approvedByMe: boolean
+  approved: number
+  required: number
+  blocked: boolean
+}
+
+export const getPendingReviews = (signal?: AbortSignal) => api<PendingReview[]>('/approvals/pending', { signal })
+
+export const approveExecution = (id: number) => send<Execution>('POST', `/executions/${id}/approve`)
+export const rejectExecution = (id: number, reason: string) =>
+  send<Execution>('POST', `/executions/${id}/reject`, reason.trim() ? { reason: reason.trim() } : undefined)
+export const cancelExecution = (id: number) => send<Execution>('POST', `/executions/${id}/cancel`)
+export const withdrawApproval = (id: number) => send<Execution>('POST', `/executions/${id}/withdraw`)
 
 export type ExecutionFetcher = (id: string, signal: AbortSignal) => Promise<Execution>
 
