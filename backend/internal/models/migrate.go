@@ -17,6 +17,7 @@ func All() []any {
 		&DatabaseLock{},
 		&MigrationExecution{},
 		&ExecutionAttempt{},
+		&MigrationApproval{},
 	}
 }
 
@@ -28,6 +29,11 @@ func Migrate(db *gorm.DB) error {
 	// An execution is undone by at most one successful rollback.
 	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_executions_reverted_once
 		ON migration_executions (reverts_execution_id) WHERE kind = 'rollback' AND status = 'success'`).Error; err != nil {
+		return err
+	}
+	// A person has at most one live approval per execution.
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_live
+		ON migration_approvals (execution_id, user_id) WHERE revoked_at IS NULL`).Error; err != nil {
 		return err
 	}
 	if err := backfillM1History(db); err != nil {

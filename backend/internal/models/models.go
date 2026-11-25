@@ -53,8 +53,11 @@ type Group struct {
 	ID          uint   `gorm:"primaryKey"`
 	Name        string `gorm:"size:64;not null;uniqueIndex"`
 	Description string `gorm:"not null;default:''"`
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// A group without a leader blocks approval.
+	LeaderID  *uint `gorm:"index"`
+	Leader    *User `gorm:"foreignKey:LeaderID;constraint:OnDelete:SET NULL"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type GroupMember struct {
