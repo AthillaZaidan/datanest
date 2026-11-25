@@ -50,7 +50,7 @@ func (s *Service) Submit(ctx context.Context, userID, migrationID uint, kind mod
 			return err
 		}
 		out = models.MigrationExecution{
-			MigrationID: m.ID, DatabaseID: m.DatabaseID,
+			MigrationID: m.ID, DatabaseID: m.DatabaseID, Version: m.Version, Revision: m.Revision,
 			Kind: plan.Kind, Status: models.ExecPendingReview, Mode: models.ExecModeNormal,
 			SQLExecuted: plan.SQL, RevertsExecutionID: plan.Reverts, ContinuesExecutionID: plan.Continues,
 			RequestedByID: &u.ID, RequestedByUsername: u.Username,
@@ -60,7 +60,8 @@ func (s *Service) Submit(ctx context.Context, userID, migrationID uint, kind mod
 	if err != nil {
 		return nil, err
 	}
-	slog.InfoContext(ctx, obs.EventExecutionRequested, obs.AttrActorID, u.ID, obs.AttrActor, u.Username, obs.AttrMigrationID, m.ID,
-		obs.AttrExecutionID, out.ID, obs.AttrDatabaseID, out.DatabaseID, "kind", string(out.Kind), obs.AttrStatus, string(out.Status))
+	slog.InfoContext(ctx, obs.EventExecutionRequested, append([]any{obs.AttrActorID, u.ID, obs.AttrActor, u.Username, obs.AttrMigrationID, m.ID,
+		obs.AttrExecutionID, out.ID, obs.AttrDatabaseID, out.DatabaseID, "kind", string(out.Kind), obs.AttrStatus, string(out.Status)},
+		obs.MigrationVersionAttrs(out.Version, out.Revision)...)...)
 	return &out, nil
 }
