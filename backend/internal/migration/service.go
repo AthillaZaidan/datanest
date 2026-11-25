@@ -121,6 +121,9 @@ func (s *Service) Update(ctx context.Context, userID, migrationID uint, r Recipe
 			"sql_down":            r.SQLDown,
 			"irreversible":        r.Irreversible,
 			"irreversible_reason": r.IrreversibleReason,
+			"mode":                r.Mode,
+			"batch_table":         r.BatchTable,
+			"batch_column":        r.BatchColumn,
 			"revision":            gorm.Expr("revision + 1"),
 			"updated_by_id":       u.ID,
 			"updated_by_username": u.Username,
@@ -171,8 +174,7 @@ func (s *Service) Duplicate(ctx context.Context, userID, migrationID uint) (*Vie
 	if err != nil {
 		return nil, err
 	}
-	return s.createDraft(ctx, userID, m.DatabaseID, Recipe{SQLUp: m.SQL, SQLDown: m.SQLDown,
-		Irreversible: m.Irreversible, IrreversibleReason: m.IrreversibleReason})
+	return s.createDraft(ctx, userID, m.DatabaseID, recipeOf(m))
 }
 
 func (s *Service) createDraft(ctx context.Context, userID, databaseID uint, r Recipe) (*View, error) {
@@ -191,6 +193,9 @@ func (s *Service) createDraft(ctx context.Context, userID, databaseID uint, r Re
 		SQLDown:            r.SQLDown,
 		Irreversible:       r.Irreversible,
 		IrreversibleReason: r.IrreversibleReason,
+		Mode:               r.Mode,
+		BatchTable:         r.BatchTable,
+		BatchColumn:        r.BatchColumn,
 		Status:             models.MigrationDraft,
 		Revision:           1,
 		CreatedByID:        &u.ID,
