@@ -118,3 +118,21 @@ func TestNotAnApproverIsLoggedAsDenied(t *testing.T) {
 		t.Error("NOT_AN_APPROVER was not logged as authz.denied")
 	}
 }
+
+func TestAPanicIsAnsweredAndLoggedAsJSON(t *testing.T) {
+	lines := captureLogs(t)
+	r := NewRouter(Deps{RequireAuth: passthrough, Me: func(*gin.Context) { panic("rusak") }})
+
+	w := do(r, "GET", "/api/auth/me")
+
+	var body apperr.Body
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != http.StatusInternalServerError || body.Error.Code != "INTERNAL_ERROR" {
+		t.Errorf("response = %d %s", w.Code, w.Body)
+	}
+	if p := firstEvent(lines(), "http.panic"); p == nil || p["level"] != "ERROR" || p[obs.AttrError] != "rusak" || p["stack"] == nil || p[obs.AttrCorrelationID] == nil {
+		t.Errorf("panic line = %v", p)
+	}
+	if q := firstEvent(lines(), obs.EventHTTPRequest); q == nil || q[obs.AttrStatus] != float64(500) {
+		t.Errorf("request line = %v", q)
+	}
+}
