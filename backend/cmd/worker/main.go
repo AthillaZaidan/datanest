@@ -15,6 +15,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/AthillaZaidan/datanest/backend/internal/approval"
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/config"
 	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
@@ -51,6 +52,8 @@ func newWorker(db *gorm.DB, targets dbconn.TargetDBProvider, cfg *config.Config)
 		ExecTimeout:      cfg.Target.MigrationExecTimeout,
 	})
 	w.Revalidate = migrationService.Revalidate
+	approvals := approval.NewService(db, authz.New(db))
+	w.PromoteApproved = func(ctx context.Context) (int, error) { return approvals.PromoteStale(ctx, 10*time.Second) }
 	return w
 }
 
