@@ -66,6 +66,11 @@ var contract = []struct{ method, path string }{
 	{"GET", "/api/databases/3/executions"},
 	{"POST", "/api/migrations/7/executions"},
 	{"GET", "/api/executions/7"},
+	{"POST", "/api/executions/7/approve"},
+	{"POST", "/api/executions/7/reject"},
+	{"POST", "/api/executions/7/cancel"},
+	{"POST", "/api/executions/7/withdraw"},
+	{"GET", "/api/approvals/pending"},
 }
 
 func do(r http.Handler, method, path string) *httptest.ResponseRecorder {
