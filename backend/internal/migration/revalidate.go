@@ -36,7 +36,7 @@ func (s *Service) Revalidate(ctx context.Context, e *models.MigrationExecution) 
 			}
 			return err
 		}
-		if plan.SQL != e.SQLExecuted || !sameID(plan.Reverts, e.RevertsExecutionID) {
+		if plan.SQL != e.SQLExecuted || !sameID(plan.Reverts, e.RevertsExecutionID) || !sameID(plan.Continues, e.ContinuesExecutionID) {
 			return errSQLChanged
 		}
 		if m.Version == nil {
