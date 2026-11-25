@@ -38,7 +38,7 @@ func TestBaseOutdated(t *testing.T) {
 		{"executed never outdated", models.MigrationSuccess, &two, 5, false},
 	}
 	for _, tt := range tests {
-		v := toView(&models.Migration{Status: tt.status, BaseVersion: tt.base}, tt.current)
+		v := toView(&models.Migration{Status: tt.status, BaseVersion: tt.base}, snapshot{current: tt.current})
 		if v.BaseOutdated != tt.want {
 			t.Errorf("%s: BaseOutdated = %v, want %v", tt.name, v.BaseOutdated, tt.want)
 		}

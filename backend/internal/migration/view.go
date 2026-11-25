@@ -18,6 +18,10 @@ type View struct {
 	Irreversible       bool                   `json:"irreversible"`
 	IrreversibleReason string                 `json:"irreversibleReason,omitempty"`
 	FrozenAt           *time.Time             `json:"frozenAt"`
+	// Active and Forwardable come from the derived position (package position), the same
+	// source as the version rules, so the SPA never infers them from status or MAX(version).
+	Active      bool `json:"active"`
+	Forwardable bool `json:"forwardable"`
 	Status             models.MigrationStatus `json:"status"`
 	ErrorMessage       string                 `json:"errorMessage,omitempty"`
 	ErrorCode          string                 `json:"errorCode,omitempty"`
@@ -34,7 +38,7 @@ type View struct {
 	FinishedAt   *time.Time `json:"finishedAt"`
 }
 
-func toView(m *models.Migration, currentVersion int) View {
+func toView(m *models.Migration, p snapshot) View {
 	base := 0
 	if m.BaseVersion != nil {
 		base = *m.BaseVersion
@@ -49,11 +53,13 @@ func toView(m *models.Migration, currentVersion int) View {
 		Irreversible:       m.Irreversible,
 		IrreversibleReason: m.IrreversibleReason,
 		FrozenAt:           m.FrozenAt,
+		Active:             p.state.IsActive(m.ID),
+		Forwardable:        p.hasNext && p.next == m.ID,
 		Status:             m.Status,
 		ErrorMessage:       m.ErrorMessage,
 		ErrorCode:          m.ErrorCode,
 		BaseVersion:        m.BaseVersion,
-		BaseOutdated:       m.Status == models.MigrationDraft && currentVersion > base,
+		BaseOutdated:       m.Status == models.MigrationDraft && p.current > base,
 		Revision:           m.Revision,
 		CreatedBy:          userLabel(m.CreatedByID, m.CreatedByUsername),
 		UpdatedBy:          userLabel(m.UpdatedByID, m.UpdatedByUsername),

@@ -66,13 +66,13 @@ func (s *Service) List(ctx context.Context, userID, databaseID uint, status stri
 	if err := q.Order("version DESC NULLS FIRST, id DESC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	current, err := s.currentVersion(ctx, databaseID)
+	p, err := s.position(ctx, databaseID)
 	if err != nil {
 		return nil, err
 	}
-	out := &ListResult{Migrations: make([]View, len(rows)), CurrentVersion: current}
+	out := &ListResult{Migrations: make([]View, len(rows)), CurrentVersion: p.current}
 	for i := range rows {
-		out.Migrations[i] = toView(&rows[i], current)
+		out.Migrations[i] = toView(&rows[i], p)
 	}
 	return out, nil
 }
@@ -181,10 +181,11 @@ func (s *Service) createDraft(ctx context.Context, userID, databaseID uint, r Re
 	if err != nil {
 		return nil, err
 	}
-	current, err := s.currentVersion(ctx, databaseID)
+	p, err := s.position(ctx, databaseID)
 	if err != nil {
 		return nil, err
 	}
+	current := p.current
 	m := models.Migration{
 		DatabaseID:         databaseID,
 		SQL:                r.SQLUp,
@@ -202,16 +203,16 @@ func (s *Service) createDraft(ctx context.Context, userID, databaseID uint, r Re
 	if err := s.platform.WithContext(ctx).Create(&m).Error; err != nil {
 		return nil, err
 	}
-	v := toView(&m, current)
+	v := toView(&m, p)
 	return &v, nil
 }
 
 func (s *Service) view(ctx context.Context, m *models.Migration) (*View, error) {
-	current, err := s.currentVersion(ctx, m.DatabaseID)
+	p, err := s.position(ctx, m.DatabaseID)
 	if err != nil {
 		return nil, err
 	}
-	v := toView(m, current)
+	v := toView(m, p)
 	return &v, nil
 }
 
@@ -255,9 +256,21 @@ func (s *Service) requireDatabase(ctx context.Context, databaseID uint) error {
 	return nil
 }
 
-// currentVersion is the version of the top active migration, or 0 when none is active.
-func (s *Service) currentVersion(ctx context.Context, databaseID uint) (int, error) {
-	return position.Current(ctx, s.platform, databaseID)
+// snapshot is a database's derived position as the views need it.
+type snapshot struct {
+	state   position.State
+	current int
+	next    uint
+	hasNext bool
+}
+
+func (s *Service) position(ctx context.Context, databaseID uint) (snapshot, error) {
+	st, versions, err := position.Load(ctx, s.platform, databaseID, 0)
+	if err != nil {
+		return snapshot{}, err
+	}
+	next, ok := position.NextForward(st, versions)
+	return snapshot{state: st, current: position.ActiveVersion(st, versions), next: next, hasNext: ok}, nil
 }
 
 func (s *Service) user(ctx context.Context, userID uint) (*models.User, error) {
