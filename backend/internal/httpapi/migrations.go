@@ -8,6 +8,7 @@ import (
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration"
+	"github.com/AthillaZaidan/datanest/backend/internal/models"
 )
 
 type migrationHandlers struct {
@@ -21,7 +22,12 @@ type migrationBody struct {
 	SQLDown            string  `json:"sqlDown"`
 	Irreversible       bool    `json:"irreversible"`
 	IrreversibleReason string  `json:"irreversibleReason"`
-	Revision           *int    `json:"revision"`
+
+	Mode        models.ExecutionMode `json:"mode"`
+	BatchTable  string               `json:"batchTable"`
+	BatchColumn string               `json:"batchColumn"`
+
+	Revision *int `json:"revision"`
 }
 
 func (b *migrationBody) recipe() migration.Recipe {
@@ -29,7 +35,8 @@ func (b *migrationBody) recipe() migration.Recipe {
 	if up == nil {
 		up = b.SQL
 	}
-	return migration.Recipe{SQLUp: *up, SQLDown: b.SQLDown, Irreversible: b.Irreversible, IrreversibleReason: b.IrreversibleReason}
+	return migration.Recipe{SQLUp: *up, SQLDown: b.SQLDown, Irreversible: b.Irreversible, IrreversibleReason: b.IrreversibleReason,
+		Mode: b.Mode, BatchTable: b.BatchTable, BatchColumn: b.BatchColumn}
 }
 
 var errInvalidBody = apperr.ErrValidation.WithMessage("Body JSON tidak valid.")
