@@ -116,7 +116,16 @@ type Migration struct {
 	// NULL while draft.
 	Version *int `gorm:"uniqueIndex:idx_migrations_database_version,priority:2"`
 
-	SQL          string          `gorm:"column:sql;type:text;not null"`
+	// SQL is the up SQL. The column keeps its Milestone 1 name.
+	SQL     string `gorm:"column:sql;type:text;not null"`
+	SQLDown string `gorm:"column:sql_down;type:text;not null;default:''"`
+	// An irreversible migration has no down SQL and can never be rolled back.
+	Irreversible       bool   `gorm:"not null;default:false"`
+	IrreversibleReason string `gorm:"type:text;not null;default:''"`
+	// FrozenAt is set when the first execution starts running. From then on the SQL
+	// is immutable; a fix is a new migration.
+	FrozenAt *time.Time
+
 	Status       MigrationStatus `gorm:"size:16;not null;default:draft;index;check:chk_migrations_status,status IN ('draft', 'running', 'success', 'failed')"`
 	ErrorMessage string          `gorm:"type:text;not null;default:''"`
 	// SQLSTATE.
