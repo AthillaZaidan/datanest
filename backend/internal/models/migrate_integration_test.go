@@ -133,3 +133,55 @@ func TestMigrateBackfillsM1History(t *testing.T) {
 		t.Errorf("current version after backfill = %d, %v; want 3", v, err)
 	}
 }
+
+func TestMigrateNumbersStartedExecutionsInStartOrder(t *testing.T) {
+	db := testutil.PlatformDB(t)
+	conn := testutil.CreateDatabaseConnection(t, db, "toko")
+	other := testutil.CreateDatabaseConnection(t, db, "gudang")
+	base := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	at := func(minutes int) *time.Time {
+		v := base.Add(time.Duration(minutes) * time.Minute)
+		return &v
+	}
+	create := func(databaseID uint, status models.ExecutionStatus, startedAt *time.Time) models.MigrationExecution {
+		return testutil.CreateExecution(t, db, models.MigrationExecution{DatabaseID: databaseID, Status: status, StartedAt: startedAt})
+	}
+	late := create(conn.ID, models.ExecSuccess, at(30))
+	early := create(conn.ID, models.ExecFailed, at(10))
+	runningWithoutStart := create(conn.ID, models.ExecRunning, nil)
+	pending := create(conn.ID, models.ExecQueued, nil)
+	approved := create(conn.ID, models.ExecApproved, nil)
+	elsewhere := create(other.ID, models.ExecSuccess, at(5))
+
+	seeded := create(conn.ID, models.ExecSuccess, at(1))
+	if err := db.Model(&seeded).Update("run_seq", 7).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := func() map[uint]*int64 {
+		var rows []models.MigrationExecution
+		db.Find(&rows)
+		out := map[uint]*int64{}
+		for _, r := range rows {
+			out[r.ID] = r.RunSeq
+		}
+		return out
+	}
+	for i := 0; i < 2; i++ {
+		if err := models.Migrate(db); err != nil {
+			t.Fatalf("Migrate #%d: %v", i+1, err)
+		}
+		got := snapshot()
+		want := map[uint]int64{seeded.ID: 7, early.ID: 8, late.ID: 9, runningWithoutStart.ID: 10, elsewhere.ID: 1}
+		for id, seq := range want {
+			if got[id] == nil || *got[id] != seq {
+				t.Errorf("Migrate #%d: execution %d run_seq = %v, want %d", i+1, id, got[id], seq)
+			}
+		}
+		for _, id := range []uint{pending.ID, approved.ID} {
+			if got[id] != nil {
+				t.Errorf("Migrate #%d: pending execution %d got run_seq %d", i+1, id, *got[id])
+			}
+		}
+	}
+}
