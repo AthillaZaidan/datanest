@@ -17,6 +17,9 @@ func TestBatchProblem(t *testing.T) {
 		{"trailing semicolon", "UPDATE t SET a = 1 WHERE id > $1 AND id <= $2;", ""},
 		{"parameter in string ignored", "UPDATE t SET a = '$3' WHERE id > $1 AND id <= $2", ""},
 		{"parameter in comment ignored", "UPDATE t SET a = 1 /* $3 */ WHERE id > $1 AND id <= $2 -- $4", ""},
+		{"trailing comment", "UPDATE t SET a = 1 WHERE id > $1 AND id <= $2; -- done", ""},
+		{"trailing block comment", "UPDATE t SET a = 1 WHERE id > $1 AND id <= $2; /* done */", ""},
+		{"only a comment", "-- nothing", oneStatement},
 		{"empty", "", oneStatement},
 		{"two statements", "UPDATE t SET a = 1 WHERE id > $1 AND id <= $2; SELECT 1", oneStatement},
 		{"third parameter", "UPDATE t SET a = 1 WHERE id > $1 AND id <= $2 AND b = $3", badParam},
@@ -25,6 +28,7 @@ func TestBatchProblem(t *testing.T) {
 		{"missing upper", "UPDATE t SET a = 1 WHERE id > $1", missing},
 		{"missing lower", "UPDATE t SET a = 1 WHERE id <= $2", missing},
 		{"parameter only in string", "UPDATE t SET a = '$1 $2'", missing},
+		{"parameter before dollar quote", "UPDATE t SET a = $1$$x$$ WHERE id <= $2", ""},
 		{"parameter after identifier byte", "UPDATE t SET a = 1 WHERE id > $1 AND id <= $2 AND x$3 = 1", ""},
 	}
 	for _, c := range cases {
