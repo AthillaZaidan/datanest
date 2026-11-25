@@ -2,7 +2,6 @@ package explorer
 
 import (
 	"context"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"strconv"
@@ -44,7 +43,7 @@ func (s *Service) GetRows(ctx context.Context, userID, databaseID uint, schema, 
 	page, pageSize = ClampPage(page, pageSize)
 	out := &Rows{Page: page, PageSize: pageSize, Columns: []string{}, Rows: [][]any{}}
 
-	err := s.readOnly(ctx, userID, databaseID, authz.ViewData, func(ctx context.Context, tx *sql.Tx) error {
+	err := s.readOnly(ctx, userID, databaseID, authz.ViewData, func(ctx context.Context, tx *queryTx) error {
 		oid, err := tableOID(ctx, tx, schema, table)
 		if err != nil {
 			return err
@@ -97,7 +96,7 @@ func (s *Service) GetRows(ctx context.Context, userID, databaseID uint, schema, 
 }
 
 // orderBy gives a stable order: the primary key, or ctid for tables without one.
-func orderBy(ctx context.Context, tx *sql.Tx, oid uint32) (string, error) {
+func orderBy(ctx context.Context, tx *queryTx, oid uint32) (string, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT a.attname FROM pg_index i
 		JOIN unnest(i.indkey::int2[]) WITH ORDINALITY k(attnum, ord) ON true

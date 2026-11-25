@@ -70,7 +70,7 @@ var (
 
 func (s *Service) ListSchemas(ctx context.Context, userID, databaseID uint) ([]Schema, error) {
 	out := []Schema{}
-	err := s.readOnly(ctx, userID, databaseID, authz.ViewSchema, func(ctx context.Context, tx *sql.Tx) error {
+	err := s.readOnly(ctx, userID, databaseID, authz.ViewSchema, func(ctx context.Context, tx *queryTx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT nspname FROM pg_namespace WHERE `+userSchemaFilter+` ORDER BY nspname`)
 		if err != nil {
 			return err
@@ -90,7 +90,7 @@ func (s *Service) ListSchemas(ctx context.Context, userID, databaseID uint) ([]S
 
 func (s *Service) ListTables(ctx context.Context, userID, databaseID uint, schema string) ([]Table, error) {
 	out := []Table{}
-	err := s.readOnly(ctx, userID, databaseID, authz.ViewSchema, func(ctx context.Context, tx *sql.Tx) error {
+	err := s.readOnly(ctx, userID, databaseID, authz.ViewSchema, func(ctx context.Context, tx *queryTx) error {
 		var exists bool
 		err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE `+userSchemaFilter+` AND nspname = $1)`, schema).Scan(&exists)
 		if err != nil {
@@ -122,7 +122,7 @@ func (s *Service) ListTables(ctx context.Context, userID, databaseID uint, schem
 
 func (s *Service) GetTable(ctx context.Context, userID, databaseID uint, schema, table string) (*TableDetail, error) {
 	detail := &TableDetail{Schema: schema, Name: table}
-	err := s.readOnly(ctx, userID, databaseID, authz.ViewSchema, func(ctx context.Context, tx *sql.Tx) error {
+	err := s.readOnly(ctx, userID, databaseID, authz.ViewSchema, func(ctx context.Context, tx *queryTx) error {
 		oid, err := tableOID(ctx, tx, schema, table)
 		if err != nil {
 			return err
@@ -143,7 +143,7 @@ func (s *Service) GetTable(ctx context.Context, userID, databaseID uint, schema,
 }
 
 // tableOID resolves a user-visible table; unknown names are 404, never interpolated into SQL.
-func tableOID(ctx context.Context, tx *sql.Tx, schema, table string) (uint32, error) {
+func tableOID(ctx context.Context, tx *queryTx, schema, table string) (uint32, error) {
 	var oid uint32
 	err := tx.QueryRowContext(ctx, `
 		SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -156,7 +156,7 @@ func tableOID(ctx context.Context, tx *sql.Tx, schema, table string) (uint32, er
 	return oid, err
 }
 
-func columns(ctx context.Context, tx *sql.Tx, oid uint32) ([]Column, error) {
+func columns(ctx context.Context, tx *queryTx, oid uint32) ([]Column, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT a.attname, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, pg_get_expr(d.adbin, d.adrelid)
 		FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
@@ -191,7 +191,7 @@ var constraintTypes = map[string]string{
 	"t": "TRIGGER",
 }
 
-func constraints(ctx context.Context, tx *sql.Tx, oid uint32) ([]Constraint, error) {
+func constraints(ctx context.Context, tx *queryTx, oid uint32) ([]Constraint, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT con.conname, con.contype, pg_get_constraintdef(con.oid, true),
 			(SELECT COALESCE(json_agg(a.attname ORDER BY k.ord), '[]')
@@ -237,7 +237,7 @@ func constraints(ctx context.Context, tx *sql.Tx, oid uint32) ([]Constraint, err
 	return out, rows.Err()
 }
 
-func indexes(ctx context.Context, tx *sql.Tx, oid uint32) ([]Index, error) {
+func indexes(ctx context.Context, tx *queryTx, oid uint32) ([]Index, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT ic.relname, pg_get_indexdef(i.indexrelid), i.indisunique, i.indisprimary
 		FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid

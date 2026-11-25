@@ -4,7 +4,6 @@ package explorer
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -29,7 +28,7 @@ func TestReadOnlyRejectsWrites(t *testing.T) {
 	conn := testutil.CreateDatabaseConnection(t, platform, "toko")
 	svc := New(platform, testutil.StaticProvider{DB: target}, allowAll{}, 5*time.Second)
 
-	err := svc.readOnly(context.Background(), user.ID, conn.ID, authz.ViewData, func(ctx context.Context, tx *sql.Tx) error {
+	err := svc.readOnly(context.Background(), user.ID, conn.ID, authz.ViewData, func(ctx context.Context, tx *queryTx) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO products VALUES (1)`)
 		return err
 	})

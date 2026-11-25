@@ -13,6 +13,7 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 	"github.com/AthillaZaidan/datanest/backend/internal/targeterr"
 )
 
@@ -34,7 +35,7 @@ func New(platform *gorm.DB, targets dbconn.TargetDBProvider, az Authorizer, time
 var errDatabaseNotFound = apperr.ErrNotFound.WithMessage("Database tidak ditemukan.")
 
 // readOnly checks access, then runs fn in a READ ONLY transaction on the target database.
-func (s *Service) readOnly(ctx context.Context, userID, databaseID uint, action authz.Action, fn func(context.Context, *sql.Tx) error) error {
+func (s *Service) readOnly(ctx context.Context, userID, databaseID uint, action authz.Action, fn func(context.Context, *queryTx) error) error {
 	var count int64
 	err := s.platform.WithContext(ctx).Model(&models.DatabaseConnection{}).Where("id = ?", databaseID).Count(&count).Error
 	if err != nil {
@@ -64,5 +65,6 @@ func (s *Service) readOnly(ctx context.Context, userID, databaseID uint, action 
 		return targeterr.Map(err)
 	}
 	defer tx.Rollback()
-	return targeterr.Map(fn(ctx, tx))
+	logged := &queryTx{Tx: tx, attrs: []any{obs.AttrActorID, userID, obs.AttrDatabaseID, databaseID, obs.AttrAction, string(action)}}
+	return targeterr.Map(fn(ctx, logged))
 }
