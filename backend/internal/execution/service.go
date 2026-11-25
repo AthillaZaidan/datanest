@@ -49,6 +49,8 @@ type View struct {
 	ID            uint                 `json:"id"`
 	MigrationID   uint                 `json:"migrationId"`
 	DatabaseID    uint                 `json:"databaseId"`
+	Version       *int                 `json:"version"`
+	Revision      int                  `json:"revision"`
 	Kind          string               `json:"kind"`
 	Status        string               `json:"status"`
 	Mode          string               `json:"mode"`
@@ -99,7 +101,7 @@ func (s *Service) Get(ctx context.Context, userID, id uint) (*View, error) {
 
 func toView(e *models.MigrationExecution, attempts []models.ExecutionAttempt) *View {
 	v := &View{
-		ID: e.ID, MigrationID: e.MigrationID, DatabaseID: e.DatabaseID,
+		ID: e.ID, MigrationID: e.MigrationID, DatabaseID: e.DatabaseID, Version: e.Version, Revision: e.Revision,
 		Kind: string(e.Kind), Status: string(e.Status), Mode: string(e.Mode), BatchSize: e.BatchSize,
 		ErrorCode: e.ErrorCode, ErrorMessage: e.ErrorMessage,
 		Approvers: []ApproverView{}, BlockedGroups: []approval.GroupRef{},
