@@ -46,6 +46,36 @@ func TestRecipeCreateAndValidate(t *testing.T) {
 	}
 }
 
+func TestRecipeCarriesItsBatchConfiguration(t *testing.T) {
+	e := setupMigrations(t)
+	body := map[string]any{"sqlUp": "UPDATE orders SET a = 1 WHERE id > $1 AND id <= $2", "sqlDown": "UPDATE orders SET a = 0 WHERE id > $1 AND id <= $2",
+		"mode": "batch", "batchTable": "orders", "batchColumn": "id"}
+	if r := e.recipe(t, map[string]any{"sqlUp": "SELECT 1", "mode": "batch"}); r.Code != 400 || r.errCode() != "VALIDATION_ERROR" {
+		t.Errorf("batch without table = %d %s", r.Code, r.errCode())
+	}
+	created := e.recipe(t, body).view(t)
+	if created.Mode != models.ExecModeBatch || created.BatchTable != "orders" || created.BatchColumn != "id" {
+		t.Fatalf("created = %+v", created)
+	}
+
+	dup := call(e.as(e.editor), "POST", "/api/migrations/"+itoa(created.ID)+"/duplicate", nil).view(t)
+	if dup.Mode != models.ExecModeBatch || dup.BatchTable != "orders" || dup.BatchColumn != "id" {
+		t.Errorf("duplicate = %+v", dup)
+	}
+
+	path := "/api/migrations/" + itoa(created.ID)
+	body["batchTable"], body["batchColumn"], body["revision"] = "public.orders", "order_id", 1
+	updated := call(e.as(e.editor), "PATCH", path, body).view(t)
+	if updated.Mode != models.ExecModeBatch || updated.BatchTable != "public.orders" || updated.BatchColumn != "order_id" {
+		t.Errorf("updated = %+v", updated)
+	}
+
+	plain := call(e.as(e.editor), "PATCH", path, map[string]any{"sqlUp": "SELECT 1", "sqlDown": "SELECT 2", "revision": 2}).view(t)
+	if plain.Mode != models.ExecModeNormal || plain.BatchTable != "" || plain.BatchColumn != "" {
+		t.Errorf("back to normal = %+v", plain)
+	}
+}
+
 func TestRecipeLockedWhileAnExecutionIsOpen(t *testing.T) {
 	e := setupMigrations(t)
 	d := e.recipe(t, map[string]any{"sqlUp": "SELECT 1", "sqlDown": "SELECT 2"}).view(t)
