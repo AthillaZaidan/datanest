@@ -145,6 +145,51 @@ func TestRunRollbackForwardThroughTheWorker(t *testing.T) {
 	}
 }
 
+// The API view tells the SPA whether a migration is applied and whether it is the one a
+// forward may run, from the same derived position as the version rules.
+func TestViewShowsActiveAndForwardable(t *testing.T) {
+	f := setupFlow(t)
+	a := f.recipe("CREATE TABLE a (id int)", "DROP TABLE a")
+	b := f.recipe("CREATE TABLE b (id int)", "DROP TABLE b")
+	check := func(step string, id uint, active, forwardable bool) {
+		t.Helper()
+		v, err := f.svc.Get(f.ctx, f.viewer.ID, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.Active != active || v.Forwardable != forwardable {
+			t.Errorf("%s: migration %d active %v forwardable %v, want %v %v", step, id, v.Active, v.Forwardable, active, forwardable)
+		}
+	}
+	check("draft", a, false, false)
+
+	f.do(a, models.ExecKindRun)
+	f.do(b, models.ExecKindRun)
+	check("after runs", a, true, false)
+	check("after runs", b, true, false)
+
+	f.do(b, models.ExecKindRollback)
+	f.do(a, models.ExecKindRollback)
+	check("after rollbacks", a, false, true)
+	check("after rollbacks", b, false, false)
+	list, err := f.svc.List(f.ctx, f.viewer.ID, f.dbID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range list.Migrations {
+		if v.Active {
+			t.Errorf("list after rollbacks: v%d still active", *v.Version)
+		}
+	}
+	if list.CurrentVersion != 0 {
+		t.Errorf("list current = %d, want 0", list.CurrentVersion)
+	}
+
+	f.do(a, models.ExecKindForward)
+	check("after forward", a, true, false)
+	check("after forward", b, false, true)
+}
+
 func TestFailedRunCanBeForwardedUntilANewRunDiscardsIt(t *testing.T) {
 	f := setupFlow(t)
 	if _, err := f.target.Exec(`CREATE TABLE blocker (id int)`); err != nil {
