@@ -42,6 +42,9 @@ func Migrate(db *gorm.DB) error {
 	if err := backfillRunSeq(db); err != nil {
 		return err
 	}
+	if err := backfillVersionAndRevision(db); err != nil {
+		return err
+	}
 	return db.Where(Role{Name: RolePlatformAdmin}).FirstOrCreate(&Role{}).Error
 }
 
@@ -99,5 +102,18 @@ func backfillRunSeq(db *gorm.DB) error {
 				WHERE x.run_seq IS NULL
 					AND (x.started_at IS NOT NULL OR x.status IN ('running', 'success', 'failed', 'partial', 'uncertain'))
 			) n WHERE e.id = n.id`).Error
+	})
+}
+
+func backfillVersionAndRevision(db *gorm.DB) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		err := tx.Exec(`UPDATE migration_executions e SET revision = m.revision
+			FROM migrations m WHERE m.id = e.migration_id AND e.revision = 0 AND m.revision <> 0`).Error
+		if err != nil {
+			return err
+		}
+		return tx.Exec(`UPDATE migration_executions e SET version = m.version
+			FROM migrations m WHERE m.id = e.migration_id AND e.version IS NULL AND m.version IS NOT NULL
+				AND (e.started_at IS NOT NULL OR e.status IN ('running', 'success', 'failed', 'partial', 'uncertain'))`).Error
 	})
 }
