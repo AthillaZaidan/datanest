@@ -1,5 +1,5 @@
 import { api, send } from './client'
-import type { Execution, ExecutionKind } from './executions'
+import type { Execution, ExecutionKind, ExecutionStatus } from './executions'
 
 export type MigrationStatus = 'draft' | 'running' | 'success' | 'failed'
 
@@ -59,6 +59,25 @@ export function deleteMigration(id: string) {
 // Run, forward and rollback are new executions that go through approval and the queue.
 export function submitExecution(id: string, kind: ExecutionKind) {
   return send<Execution>('POST', `/migrations/${enc(id)}/executions`, { kind })
+}
+
+export type HistoryItem = {
+  id: number
+  migrationId: number
+  version: number | null
+  kind: ExecutionKind
+  status: ExecutionStatus
+  sqlExecuted: string
+  revertsExecutionId: number | null
+  requestedBy: string
+  errorCode?: string
+  errorMessage?: string
+  startedAt: string | null
+  finishedAt: string | null
+}
+
+export function listExecutions(databaseId: string, hideRollback: boolean) {
+  return api<{ executions: HistoryItem[] }>(`/databases/${enc(databaseId)}/executions${hideRollback ? '?hideRollback=true' : ''}`)
 }
 
 export function duplicateMigration(id: string) {

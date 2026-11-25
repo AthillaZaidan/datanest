@@ -1,7 +1,7 @@
 import { Link, useParams, useSearchParams } from 'react-router'
 import { getDatabase } from '../api/databases'
 import { type Migration, type MigrationStatus, listMigrations } from '../api/migrations'
-import { PlusIcon } from '../components/icons'
+import { HistoryIcon, PlusIcon } from '../components/icons'
 import { Alert, Empty, Loading, PageHeader, Tabs } from '../components/kit'
 import StatusBadge from '../components/migrations/StatusBadge'
 import VersionRail from '../components/migrations/VersionRail'
@@ -52,11 +52,16 @@ export default function Migrations() {
         title="Riwayat migration"
         subtitle={data && finding(all)}
         actions={
-          canEdit && (
-            <Link className={ui.buttonPrimary} to={`/databases/${databaseId}/migrations/new`}>
-              <PlusIcon /> Migration baru
+          <>
+            <Link className={ui.button} to={`/databases/${databaseId}/executions`}>
+              <HistoryIcon /> Riwayat eksekusi
             </Link>
-          )
+            {canEdit && (
+              <Link className={ui.buttonPrimary} to={`/databases/${databaseId}/migrations/new`}>
+                <PlusIcon /> Migration baru
+              </Link>
+            )}
+          </>
         }
       />
 
