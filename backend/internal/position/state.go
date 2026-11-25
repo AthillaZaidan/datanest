@@ -21,7 +21,7 @@ type Applied struct {
 	ExecutionID uint
 }
 
-// State is the active position of one database, derived from its executions in id
+// State is the active position of one database, derived from its executions in run
 // order and never stored separately:
 //   - a successful run or forward puts its migration on top of the active stack;
 //   - a successful rollback takes it off again;
@@ -59,7 +59,7 @@ func open(s models.ExecutionStatus) bool {
 	return false
 }
 
-// Derive computes the State from all executions of one database, sorted by id.
+// Derive computes the State from all executions of one database, in run order.
 func Derive(events []Event) State {
 	st := State{Redo: map[uint]bool{}, Started: map[uint]bool{}, Open: map[uint]bool{}}
 
