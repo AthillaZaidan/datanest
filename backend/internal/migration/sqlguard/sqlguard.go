@@ -3,7 +3,6 @@ package sqlguard
 
 import (
 	"strings"
-	"unicode"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 )
@@ -46,7 +45,7 @@ func tokens(sql string) []string {
 			i++
 		case isWord(sql[i]):
 			start := i
-			for i < len(sql) && isWord(sql[i]) {
+			for i < len(sql) && (isWord(sql[i]) || sql[i] == '$') {
 				i++
 			}
 			out = append(out, strings.ToLower(sql[start:i]))
@@ -95,7 +94,7 @@ func skip(sql string, i int) int {
 	switch {
 	case strings.HasPrefix(sql[i:], "--"):
 		i += 2
-		for i < len(sql) && sql[i] != '\n' {
+		for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
 			i++
 		}
 	case strings.HasPrefix(sql[i:], "/*"):
@@ -112,6 +111,8 @@ func skip(sql string, i int) int {
 				i++
 			}
 		}
+	case sql[i] == '\'' && endsEscapePrefix(sql, i):
+		i = escapeStringEnd(sql, i+1)
 	case sql[i] == '\'' || sql[i] == '"':
 		q := sql[i]
 		i++
@@ -126,7 +127,7 @@ func skip(sql string, i int) int {
 			}
 			i++
 		}
-	case sql[i] == '$':
+	case sql[i] == '$' && (i == 0 || !isWord(sql[i-1]) && sql[i-1] != '$'):
 		if end := dollarEnd(sql, i); end != "" {
 			i += len(end)
 			if close := strings.Index(sql[i:], end); close >= 0 {
@@ -162,11 +163,73 @@ func MaskLiterals(sql string) string {
 	return b.String()
 }
 
-func isWord(b byte) bool { return b == '_' || unicode.IsLetter(rune(b)) || unicode.IsDigit(rune(b)) }
+func isWord(b byte) bool {
+	return b == '_' || b >= 0x80 || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
+}
+
+func isTagStart(b byte) bool {
+	return b == '_' || b >= 0x80 || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+}
+
+func endsEscapePrefix(sql string, quote int) bool {
+	start := quote
+	for start > 0 && (isWord(sql[start-1]) || sql[start-1] == '$') {
+		start--
+	}
+	return quote-start == 1 && (sql[start] == 'e' || sql[start] == 'E')
+}
+
+func escapeStringEnd(sql string, i int) int {
+	for i < len(sql) {
+		switch sql[i] {
+		case '\\':
+			i += 2
+		case '\'':
+			i++
+			if i < len(sql) && sql[i] == '\'' {
+				i++
+				continue
+			}
+			next, ok := continuation(sql, i)
+			if !ok {
+				return i
+			}
+			i = next
+		default:
+			i++
+		}
+	}
+	return len(sql)
+}
+
+func continuation(sql string, i int) (int, bool) {
+	sawNewline := false
+	for i < len(sql) {
+		switch {
+		case sql[i] == '\n' || sql[i] == '\r':
+			sawNewline = true
+			i++
+		case sql[i] == ' ' || sql[i] == '\t' || sql[i] == '\f' || sql[i] == '\v':
+			i++
+		case strings.HasPrefix(sql[i:], "--"):
+			for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
+				i++
+			}
+		case sql[i] == '\'':
+			return i + 1, sawNewline
+		default:
+			return i, false
+		}
+	}
+	return i, false
+}
+
 func dollarEnd(sql string, i int) string {
 	j := i + 1
-	for j < len(sql) && (sql[j] == '_' || unicode.IsLetter(rune(sql[j])) || unicode.IsDigit(rune(sql[j]))) {
-		j++
+	if j < len(sql) && isTagStart(sql[j]) {
+		for j < len(sql) && isWord(sql[j]) {
+			j++
+		}
 	}
 	if j < len(sql) && sql[j] == '$' {
 		return sql[i : j+1]
