@@ -13,10 +13,11 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/position"
 )
 
-// Submit asks for an execution of a migration (design D3/D9): run for its first attempt,
-// forward to apply it again, rollback to undo it. The version rules are checked now and
-// again by the worker (Revalidate). The request starts as pending_review; approval and
-// the queue take it from there.
+// Submit asks for an execution of a migration (design D3/D9): run for the first attempt
+// that really starts, forward to apply it again or to continue a partial one, rollback to
+// undo it (partial or not) or to continue a partial rollback. The version rules are checked
+// now and again by the worker (Revalidate). The request starts as pending_review; approval
+// and the queue take it from there.
 func (s *Service) Submit(ctx context.Context, userID, migrationID uint, kind models.ExecutionKind) (*models.MigrationExecution, error) {
 	m, err := s.loadAuthorized(ctx, userID, migrationID, authz.ExecuteMigration)
 	if err != nil {
