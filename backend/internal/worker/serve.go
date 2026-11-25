@@ -16,7 +16,7 @@ func (w *Worker) Handle(ctx context.Context, m queue.Message) {
 		return
 	}
 
-	claimed, result, err := w.Claim(ctx, m.ExecutionID)
+	claimed, result, err := w.ClaimWith(ctx, m.ExecutionID, m.Traceparent)
 	switch {
 	case err != nil:
 		slog.Error("execution.claim_failed", "execution_id", m.ExecutionID, "error", err)
