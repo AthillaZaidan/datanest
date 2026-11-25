@@ -3,6 +3,8 @@
 package position
 
 import (
+	"maps"
+
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
 )
 
@@ -71,6 +73,7 @@ func open(s models.ExecutionStatus) bool {
 // Derive computes the State from all executions of one database, in run order.
 func Derive(events []Event) State {
 	st := State{Redo: map[uint]bool{}, Started: map[uint]bool{}, Open: map[uint]bool{}}
+	firstRun := map[uint]int{}
 
 	for _, e := range events {
 		if open(e.Status) {
@@ -84,6 +87,9 @@ func Derive(events []Event) State {
 		switch e.Kind {
 		case models.ExecKindRun:
 			st.Started[e.MigrationID] = true
+			if _, seen := firstRun[e.MigrationID]; !seen {
+				firstRun[e.MigrationID] = len(firstRun)
+			}
 			switch e.Status {
 			case models.ExecSuccess:
 				st.discard()
@@ -101,10 +107,11 @@ func Derive(events []Event) State {
 				if st.Partial.continuedBy(e) {
 					st.Partial = nil
 				}
+				maps.DeleteFunc(st.Redo, func(m uint, _ bool) bool {
+					return m == e.MigrationID || firstRun[m] < firstRun[e.MigrationID]
+				})
 				if e.MigrationID == st.Retry {
-					st.discard()
-				} else {
-					delete(st.Redo, e.MigrationID)
+					st.Retry = 0
 				}
 				st.Active = append(st.Active, applied)
 			}
