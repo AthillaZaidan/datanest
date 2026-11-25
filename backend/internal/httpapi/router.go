@@ -88,8 +88,8 @@ func NewRouter(d Deps) *gin.Engine {
 		return h
 	}
 	r := gin.New()
-	r.Use(gin.Recovery())
 	r.Use(RequestLogger())
+	r.Use(Recovery())
 	if d.Security != nil {
 		r.Use(d.Security)
 	}
