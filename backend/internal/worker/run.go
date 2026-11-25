@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -101,21 +100,11 @@ func (w *Worker) logRecoveryCheck(ctx context.Context, e *models.MigrationExecut
 }
 
 func (w *Worker) revalidate(ctx context.Context, e *models.MigrationExecution) error {
-	blockers, err := w.store.Blockers(ctx, e)
-	if err != nil {
-		return err
+	if w.Revalidate == nil {
+		return nil
 	}
-	if len(blockers) > 0 {
-		parts := make([]string, len(blockers))
-		for i, b := range blockers {
-			parts[i] = fmt.Sprintf("#%d (%s)", b.ID, b.Status)
-		}
-		return permanent("BLOCKED", "Database ini masih ditahan oleh eksekusi %s. Selesaikan atau pulihkan dulu.", strings.Join(parts, ", "))
-	}
-	if w.Revalidate != nil {
-		if err := w.Revalidate(ctx, e); err != nil {
-			return permanent("REVALIDATION_FAILED", "%s", err.Error())
-		}
+	if err := w.Revalidate(ctx, e); err != nil {
+		return permanent("REVALIDATION_FAILED", "%s", err.Error())
 	}
 	return nil
 }
