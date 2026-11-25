@@ -175,3 +175,21 @@ func (h migrationHandlers) withMigration(c *gin.Context, status int, fn func(con
 	}
 	c.JSON(status, v)
 }
+
+// history is GET /databases/:databaseId/executions?hideRollback=true.
+func (h migrationHandlers) history(c *gin.Context) {
+	userID, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	dbID, ok := pathID(c, "databaseId")
+	if !ok {
+		return
+	}
+	items, err := h.svc.History(c.Request.Context(), userID, dbID, c.Query("hideRollback") == "true")
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"executions": items})
+}
