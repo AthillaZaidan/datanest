@@ -28,12 +28,11 @@ type Service struct {
 	platform *gorm.DB
 	targets  dbconn.TargetDBProvider
 	authz    Authorizer
-	locks    *DBLocks
 	opts     Options
 }
 
 func New(platform *gorm.DB, targets dbconn.TargetDBProvider, az Authorizer, opts Options) *Service {
-	return &Service{platform: platform, targets: targets, authz: az, locks: NewDBLocks(), opts: opts}
+	return &Service{platform: platform, targets: targets, authz: az, opts: opts}
 }
 
 var (

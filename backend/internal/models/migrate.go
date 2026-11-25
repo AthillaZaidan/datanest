@@ -70,13 +70,6 @@ func backfillM1History(db *gorm.DB) error {
 	})
 }
 
-// RecordLegacyRun records the result of the Milestone 1 direct execution of one
-// migration as a run execution. It does nothing until the migration has settled and
-// nothing if the run was recorded already.
-func RecordLegacyRun(db *gorm.DB, migrationID uint) error {
-	return insertRunExecutions(db, "id = ?", migrationID)
-}
-
 // unrecordedRun selects migrations that settled through the Milestone 1 path and
 // have no execution yet.
 const unrecordedRun = `version IS NOT NULL AND status IN ('success', 'failed')

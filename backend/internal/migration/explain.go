@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -158,4 +159,15 @@ func (p *StatementPlan) parse(raw []byte) error {
 	}
 	walk(out[0].Plan, 0)
 	return nil
+}
+
+func (s *Service) limits() []string {
+	out := []string{"SET LOCAL standard_conforming_strings = on"}
+	if s.opts.LockTimeout > 0 {
+		out = append(out, fmt.Sprintf("SET LOCAL lock_timeout = %d", s.opts.LockTimeout.Milliseconds()))
+	}
+	if s.opts.StatementTimeout > 0 {
+		out = append(out, fmt.Sprintf("SET LOCAL statement_timeout = %d", s.opts.StatementTimeout.Milliseconds()))
+	}
+	return out
 }

@@ -1,4 +1,4 @@
-// Package migration manages drafts and executes migrations on target databases.
+// Package migration manages migration recipes and submits their executions; the worker runs them.
 package migration
 
 import (
@@ -6,8 +6,8 @@ import (
 	"database/sql"
 )
 
-// LedgerTable lives in each target's public schema. It is written in the same transaction
-// as the migration, so a row exists exactly when that migration committed.
+// LedgerTable is the version ledger the retired Milestone 1 execution wrote in each target's
+// public schema. It is no longer written, but old targets still have it, so the explorer hides it.
 const LedgerTable = "_platform_migrations"
 
 const ExecutionLedgerTable = "_platform_executions"
