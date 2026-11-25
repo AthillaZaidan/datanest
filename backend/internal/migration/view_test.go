@@ -7,6 +7,7 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/position"
 )
 
 func TestUserLabel(t *testing.T) {
@@ -41,6 +42,32 @@ func TestBaseOutdated(t *testing.T) {
 		v := toView(&models.Migration{Status: tt.status, BaseVersion: tt.base}, snapshot{current: tt.current})
 		if v.BaseOutdated != tt.want {
 			t.Errorf("%s: BaseOutdated = %v, want %v", tt.name, v.BaseOutdated, tt.want)
+		}
+	}
+}
+
+func TestForwardableOnTheView(t *testing.T) {
+	versions := map[uint]int{1: 1, 2: 2, 3: 3}
+	state := position.State{Redo: map[uint]bool{1: true, 2: true}, Retry: 3}
+	partial := state
+	partial.Partial = &position.Partial{ExecutionID: 9, MigrationID: 1, Kind: models.ExecKindForward}
+	tests := []struct {
+		name  string
+		state position.State
+		id    uint
+		want  bool
+	}{
+		{"lowest redo", state, 1, true},
+		{"higher redo", state, 2, false},
+		{"failed run", state, 3, true},
+		{"draft", state, 4, false},
+		{"lowest redo while partial", partial, 1, false},
+		{"failed run while partial", partial, 3, false},
+	}
+	for _, tt := range tests {
+		v := toView(&models.Migration{ID: tt.id}, snapshot{state: tt.state, versions: versions})
+		if v.Forwardable != tt.want {
+			t.Errorf("%s: Forwardable = %v, want %v", tt.name, v.Forwardable, tt.want)
 		}
 	}
 }
