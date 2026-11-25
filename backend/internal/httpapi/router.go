@@ -53,6 +53,10 @@ func NewRouter(d Deps) *gin.Engine {
 	if d.Executions != nil {
 		getExec = executionHandlers{svc: d.Executions}.get
 	}
+	submitExec := notImplemented
+	if d.Migrations != nil && d.Executions != nil {
+		submitExec = submissionHandlers{migrations: d.Migrations, executions: d.Executions}.submit
+	}
 
 	ah := adminHandlers{svc: d.Admin}
 	dh := databaseHandlers{svc: d.Databases}
@@ -129,6 +133,7 @@ func NewRouter(d Deps) *gin.Engine {
 	user.POST("/migrations/:migrationId/duplicate", duplicateMig)
 	user.POST("/migrations/:migrationId/explain", explainMig)
 
+	user.POST("/migrations/:migrationId/executions", submitExec)
 	user.GET("/executions/:executionId", getExec)
 
 	return r
