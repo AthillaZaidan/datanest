@@ -21,6 +21,7 @@ func (w *Worker) Dispatch(ctx context.Context, e *models.MigrationExecution) err
 	if w.Publisher == nil {
 		return errors.New("worker: no publisher configured")
 	}
+	ctx = obs.WithTraceparent(obs.WithCorrelationID(ctx, e.CorrelationID), e.Traceparent)
 	job := queue.Job{ExecutionID: e.ID, Traceparent: e.Traceparent, CorrelationID: e.CorrelationID}
 	if err := w.Publisher.Publish(ctx, job); err != nil {
 		return err
