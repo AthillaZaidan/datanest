@@ -66,6 +66,7 @@ func TestMigrateBackfillsM1History(t *testing.T) {
 	v1 := m1(1, models.MigrationSuccess)
 	v2 := m1(2, models.MigrationFailed)
 	running := m1(4, models.MigrationRunning)
+	runningWithoutVersion := m1(0, models.MigrationRunning)
 	draft := m1(0, models.MigrationDraft)
 
 	for i := 0; i < 2; i++ { // the second run must change nothing
@@ -79,7 +80,7 @@ func TestMigrateBackfillsM1History(t *testing.T) {
 	want := []struct {
 		id     uint
 		status models.ExecutionStatus
-	}{{v1.ID, models.ExecSuccess}, {v2.ID, models.ExecFailed}, {v3.ID, models.ExecSuccess}}
+	}{{v1.ID, models.ExecSuccess}, {v2.ID, models.ExecFailed}, {v3.ID, models.ExecSuccess}, {running.ID, models.ExecFailed}}
 	if len(execs) != len(want) {
 		t.Fatalf("executions = %d, want %d: %+v", len(execs), len(want), execs)
 	}
@@ -101,12 +102,31 @@ func TestMigrateBackfillsM1History(t *testing.T) {
 			t.Errorf("recipe %d = %+v", m.ID, got)
 		}
 	}
-	for _, m := range []models.Migration{running, draft} {
-		var got models.Migration
-		db.First(&got, m.ID)
-		if got.Irreversible || got.FrozenAt != nil || got.Status != m.Status {
-			t.Errorf("migration %d (%s) must be left alone: %+v", m.ID, m.Status, got)
-		}
+	var interrupted models.Migration
+	db.First(&interrupted, running.ID)
+	if interrupted.Status != models.MigrationFailed || interrupted.ErrorMessage != models.M1InterruptedReason ||
+		interrupted.FinishedAt == nil || interrupted.FrozenAt == nil || !interrupted.Irreversible {
+		t.Errorf("running row was not settled as failed: %+v", interrupted)
+	}
+	if execs[3].ErrorMessage != models.M1InterruptedReason || execs[3].FinishedAt == nil {
+		t.Errorf("interrupted attempt = %+v", execs[3])
+	}
+
+	var orphan models.Migration
+	db.First(&orphan, runningWithoutVersion.ID)
+	if orphan.Status != models.MigrationFailed || orphan.ErrorMessage != models.M1InterruptedReason || orphan.FinishedAt == nil {
+		t.Errorf("running row without version = %+v", orphan)
+	}
+	var orphanRuns int64
+	db.Model(&models.MigrationExecution{}).Where("migration_id = ?", orphan.ID).Count(&orphanRuns)
+	if orphanRuns != 0 {
+		t.Errorf("running row without version recorded %d executions", orphanRuns)
+	}
+
+	var untouched models.Migration
+	db.First(&untouched, draft.ID)
+	if untouched.Irreversible || untouched.FrozenAt != nil || untouched.Status != models.MigrationDraft {
+		t.Errorf("draft must be left alone: %+v", untouched)
 	}
 
 	if v, err := position.Current(ctx, db, conn.ID); err != nil || v != 3 {
