@@ -157,7 +157,7 @@ export default function ExecutionMonitor({ executionId, fetcher = getExecution }
     <div className="space-y-6">
       <div>
         <div className="flex flex-wrap items-center gap-2">
-          <ExecutionStatusBadge status={e.status} />
+          <ExecutionStatusBadge status={e.status} kind={e.kind} />
           <Pill>{kindLabel[e.kind]}</Pill>
           <Pill>{e.mode === 'batch' ? 'Per batch' : 'Normal'}</Pill>
         </div>

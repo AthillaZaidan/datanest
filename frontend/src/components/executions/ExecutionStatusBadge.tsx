@@ -1,4 +1,4 @@
-import type { ExecutionStatus } from '../../api/executions'
+import type { ExecutionKind, ExecutionStatus } from '../../api/executions'
 import { Pill } from '../kit'
 
 const styles: Record<ExecutionStatus, { label: string; tone: 'neutral' | 'warning' | 'positive' | 'negative' }> = {
@@ -14,7 +14,7 @@ const styles: Record<ExecutionStatus, { label: string; tone: 'neutral' | 'warnin
   canceled: { label: 'Dibatalkan', tone: 'neutral' },
 }
 
-export default function ExecutionStatusBadge({ status }: { status: ExecutionStatus }) {
-  const { label, tone } = styles[status]
+export default function ExecutionStatusBadge({ status, kind }: { status: ExecutionStatus; kind: ExecutionKind }) {
+  const { label, tone } = status === 'partial' && kind === 'rollback' ? { label: 'Partially reverted', tone: 'warning' as const } : styles[status]
   return <Pill tone={tone}>{label}</Pill>
 }

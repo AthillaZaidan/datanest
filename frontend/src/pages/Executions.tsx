@@ -70,7 +70,7 @@ export default function Executions() {
                     </p>
                   )}
                 </td>
-                <td className={`${ui.td} ${ui.stack.td}`}><ExecutionStatusBadge status={e.status} /></td>
+                <td className={`${ui.td} ${ui.stack.td}`}><ExecutionStatusBadge status={e.status} kind={e.kind} /></td>
                 <td className={`${ui.td} ${ui.stack.td} whitespace-nowrap`}>{e.requestedBy}</td>
                 <td className={`${ui.td} ${ui.stack.td} ${ui.num} text-muted whitespace-nowrap max-sm:text-left`}>{formatTime(e.startedAt)}</td>
               </tr>
