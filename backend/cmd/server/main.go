@@ -16,6 +16,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/admin"
+	"github.com/AthillaZaidan/datanest/backend/internal/approval"
 	"github.com/AthillaZaidan/datanest/backend/internal/auth"
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/config"
@@ -25,6 +26,7 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/httpapi"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/queue"
 	"github.com/AthillaZaidan/datanest/backend/internal/session"
 )
 
@@ -82,10 +84,16 @@ func run() error {
 	if err := migrationService.Reconcile(context.Background()); err != nil {
 		log.Printf("reconcile: %v", err)
 	}
+	approvals := approval.NewService(db, az)
+	if cfg.AMQPURL != "" {
+		publisher := queue.NewPublisher(cfg.AMQPURL, queue.JobsQueue)
+		defer publisher.Close()
+		approvals.Publisher = publisher
+	}
 	router := httpapi.NewRouter(httpapi.Deps{
 		Admin: adminService, Databases: databaseService, Explorer: explorerService, Migrations: migrationService,
-		Executions: execution.NewService(db, az),
-		Security:   auth.ValidateStateRequest(cfg.AllowedOrigin), RequireAuth: authService.RequireAuth,
+		Executions: execution.NewService(db, az), Approvals: approvals,
+		Security: auth.ValidateStateRequest(cfg.AllowedOrigin), RequireAuth: authService.RequireAuth,
 		RequireAdmin: authService.RequireAdmin, Login: authService.Login, Logout: authService.Logout, Me: authService.Me,
 	})
 	httpapi.ServeSPA(router, cfg.FrontendDir)
