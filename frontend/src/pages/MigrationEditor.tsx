@@ -8,11 +8,12 @@ import {
   createMigration,
   deleteMigration,
   duplicateMigration,
-  executeMigration,
   getMigration,
+  submitExecution,
   updateMigration,
 } from '../api/migrations'
-import { CopyIcon, PlayIcon, SaveIcon, TrashIcon } from '../components/icons'
+import type { ExecutionKind } from '../api/executions'
+import { ArrowLeftIcon, CopyIcon, PlayIcon, RefreshIcon, SaveIcon, TrashIcon } from '../components/icons'
 import { Alert, Loading, Meta, PageHeader } from '../components/kit'
 import PlanPanel from '../components/migrations/PlanPanel'
 import RecipeEditor from '../components/migrations/RecipeEditor'
@@ -141,9 +142,16 @@ function ExistingMigration({ id }: { id: string }) {
   }
 
   const save = () => run(async () => show(await updateMigration(id, recipe, migration.revision)))
-  const execute = () => {
-    if (!confirm('Jalankan migration ini pada database target?')) return
-    run(async () => show(await executeMigration(id)))
+  const current = db?.currentVersion ?? 0
+  // The backend re-checks every rule (design D2); these only decide which buttons make sense.
+  const canRollback = migration.version !== null && migration.version === current && !migration.irreversible
+  const canForward = migration.version !== null && migration.version > current
+  const submit = (kind: ExecutionKind, question: string) => {
+    if (!confirm(`${question} Permintaan masuk ke review sebelum dijalankan.`)) return
+    run(async () => {
+      const e = await submitExecution(id, kind)
+      navigate(`/executions/${e.id}`)
+    })
   }
   const remove = () => {
     if (!confirm('Hapus draft ini?')) return
@@ -165,7 +173,9 @@ function ExistingMigration({ id }: { id: string }) {
         ? `Gagal saat dijalankan ${migration.executedBy} pada ${formatTime(migration.startedAt)}. Perubahan di-rollback, schema tetap di versi sebelumnya.`
         : migration.status === 'running'
           ? `Sedang dijalankan ${migration.executedBy} sejak ${formatTime(migration.startedAt)}.`
-          : `Draft dari ${migration.createdBy}, dibuat di atas versi ${migration.baseVersion ? `v${migration.baseVersion}` : 'awal'}.`
+          : migration.frozenAt
+            ? `v${migration.version} ${migration.version !== null && migration.version <= current ? 'aktif' : 'tidak aktif'} pada database. Riwayat lengkap ada di halaman riwayat eksekusi.`
+            : `Draft dari ${migration.createdBy}, dibuat di atas versi ${migration.baseVersion ? `v${migration.baseVersion}` : 'awal'}.`
 
   return (
     <>
@@ -220,10 +230,10 @@ function ExistingMigration({ id }: { id: string }) {
                   <button
                     className={ui.buttonPrimary}
                     disabled={busy || dirty}
-                    onClick={execute}
+                    onClick={() => submit('run', 'Ajukan migration ini untuk dijalankan pada database target?')}
                     title={dirty ? 'Simpan perubahan dulu' : undefined}
                   >
-                    <PlayIcon /> Jalankan
+                    <PlayIcon /> Ajukan run
                   </button>
                   {dirty && <span className={ui.small}>Ada perubahan yang belum disimpan.</span>}
                   <button className={`${ui.buttonDanger} ml-auto`} disabled={busy} onClick={remove}>
@@ -231,7 +241,20 @@ function ExistingMigration({ id }: { id: string }) {
                   </button>
                 </>
               )}
-              {(migration.status === 'failed' || migration.status === 'success') && (
+              {canRollback && (
+                <button className={ui.buttonDanger} disabled={busy} onClick={() => submit('rollback', `Ajukan rollback v${migration.version} memakai SQL down-nya?`)}>
+                  <ArrowLeftIcon /> Rollback
+                </button>
+              )}
+              {canForward && (
+                <button className={ui.button} disabled={busy} onClick={() => submit('forward', `Ajukan forward v${migration.version} (jalankan ulang SQL up)?`)}>
+                  <RefreshIcon /> Forward
+                </button>
+              )}
+              {migration.irreversible && migration.version === current && (
+                <span className={ui.small}>Irreversible: {migration.irreversibleReason}. Tidak bisa di-rollback.</span>
+              )}
+              {(migration.status !== 'draft' || migration.frozenAt) && (
                 <button className={ui.button} disabled={busy} onClick={duplicate}>
                   <CopyIcon /> Duplikat jadi draft baru
                 </button>

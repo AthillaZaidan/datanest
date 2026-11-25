@@ -1,4 +1,5 @@
 import { api, send } from './client'
+import type { Execution, ExecutionKind } from './executions'
 
 export type MigrationStatus = 'draft' | 'running' | 'success' | 'failed'
 
@@ -55,8 +56,9 @@ export function deleteMigration(id: string) {
   return send<void>('DELETE', `/migrations/${enc(id)}`)
 }
 
-export function executeMigration(id: string) {
-  return send<Migration>('POST', `/migrations/${enc(id)}/execute`)
+// Run, forward and rollback are new executions that go through approval and the queue.
+export function submitExecution(id: string, kind: ExecutionKind) {
+  return send<Execution>('POST', `/migrations/${enc(id)}/executions`, { kind })
 }
 
 export function duplicateMigration(id: string) {
