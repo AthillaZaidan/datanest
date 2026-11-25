@@ -374,3 +374,26 @@ func TestTheLedgerRowHoldsTheRowCountOfItsBatch(t *testing.T) {
 		t.Errorf("row counts = %v, want 40, 40, 15", got)
 	}
 }
+
+func TestAnUnreadableLedgerIsNoVerdict(t *testing.T) {
+	e := setupWith(t, fencedConfig("a"))
+	x := e.newExec(models.MigrationExecution{})
+	e.w.Hooks.AfterCommit = func(uint, int) error { return ErrCrash }
+	e.crashOnce(x.ID)
+	if _, err := e.target.Exec(`ALTER TABLE _platform_executions RENAME COLUMN row_count TO hilang`); err != nil {
+		t.Fatal(err)
+	}
+
+	e.mustProcess(x.ID)
+
+	got := e.expectStatus(x.ID, models.ExecUncertain)
+	if got.NotBefore == nil || got.PublishedAt != nil {
+		t.Errorf("row = %+v; it must be checked again later", got)
+	}
+	if _, err := e.target.Exec(`ALTER TABLE _platform_executions RENAME COLUMN hilang TO row_count`); err != nil {
+		t.Fatal(err)
+	}
+	e.makeDue(x.ID)
+	e.mustProcess(x.ID)
+	e.expectStatus(x.ID, models.ExecSuccess)
+}
