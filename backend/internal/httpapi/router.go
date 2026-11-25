@@ -108,6 +108,8 @@ func NewRouter(d Deps) *gin.Engine {
 	admin.GET("/groups/:groupId/members", adminHandler(ah.members))
 	admin.PUT("/groups/:groupId/members/:userId", adminHandler(ah.member))
 	admin.DELETE("/groups/:groupId/members/:userId", adminHandler(ah.member))
+	admin.PUT("/groups/:groupId/leader", adminHandler(ah.leader))
+	admin.DELETE("/groups/:groupId/leader", adminHandler(ah.leader))
 	admin.GET("/groups/:groupId/grants", adminHandler(ah.grants))
 	admin.PUT("/groups/:groupId/grants/:databaseId", adminHandler(ah.grant))
 	admin.DELETE("/groups/:groupId/grants/:databaseId", adminHandler(ah.grant))

@@ -201,6 +201,33 @@ func (h adminHandlers) member(c *gin.Context) {
 	}
 	empty(c, h.svc.Member(c.Request.Context(), a, g, u, c.Request.Method == "PUT"))
 }
+func (h adminHandlers) leader(c *gin.Context) {
+	a, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	g, ok := pathID(c, "groupId")
+	if !ok {
+		return
+	}
+	if c.Request.Method == "DELETE" {
+		v, e := h.svc.ClearLeader(c.Request.Context(), a, g)
+		respond(c, v, e)
+		return
+	}
+	var i struct {
+		UserID uint `json:"userId"`
+	}
+	if !decode(c, &i) {
+		return
+	}
+	if i.UserID == 0 {
+		RespondError(c, apperr.ErrValidation.WithDetails(map[string]string{"userId": "wajib diisi"}))
+		return
+	}
+	v, e := h.svc.SetLeader(c.Request.Context(), a, g, i.UserID)
+	respond(c, v, e)
+}
 func (h adminHandlers) grants(c *gin.Context) {
 	a, ok := currentUser(c)
 	if !ok {
