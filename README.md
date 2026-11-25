@@ -18,15 +18,16 @@ Platform manajemen database PostgreSQL: kontrol akses lewat group, database expl
 
 - Go 1.25+
 - Bun 1.2+ (membangun dan menjalankan frontend)
-- Docker (Docker Desktop di macOS/Windows), dengan port 15432, 15433, 15434, dan 8080 kosong
+- Docker (Docker Desktop di macOS/Windows), dengan port 15432, 15433, 15434, 15672, 15673, dan 8080 kosong
 
-Ada tiga database PostgreSQL di `docker-compose.yml`:
+Ada tiga database PostgreSQL dan satu broker di `docker-compose.yml`:
 
 | Service | Port | Isi |
 | --- | --- | --- |
 | `platform-pg` | 15432 | Database milik aplikasi: user, group, grant, koneksi, riwayat migration |
 | `target-pg` | 15433 | Database yang dikelola: `toko` dan `kampus` dengan data contoh, role `platform_app` |
 | `test-pg` | 15434 | Khusus integration test, datanya hilang setiap container berhenti |
+| `rabbitmq` | 15673 (AMQP), 15672 (halaman web, `datanest`/`datanest`) | Antrean job migration, dipakai server, worker, dan integration test |
 
 ## Menjalankan dari awal
 
@@ -44,9 +45,9 @@ Isi `CREDENTIALS_KEY` dengan kunci acak (wajib, server menolak start tanpanya):
 openssl rand -base64 32
 ```
 
-Salin hasilnya ke baris `CREDENTIALS_KEY=` di `.env`. Nilai lain sudah cocok untuk lokal; penjelasan setiap variabel ada di [Isi file .env](#isi-file-env).
+Salin hasilnya ke baris `CREDENTIALS_KEY=` di `.env`. Nilai lain sudah cocok untuk lokal, termasuk `AMQP_URL`; penjelasan setiap variabel ada di [Isi file .env](#isi-file-env).
 
-**2. Nyalakan database.**
+**2. Nyalakan database dan RabbitMQ.**
 
 ```bash
 docker compose up -d --wait
@@ -81,7 +82,16 @@ menyembunyikannya. Bila `frontend/dist` belum ada, server tetap menyala dan hala
 Untuk mengembangkan frontend dengan hot reload, jalankan backend seperti di atas lalu `cd frontend && bun run dev`, dan buka
 http://localhost:5173. Daftar akun demo selalu tampil di mode ini.
 
-**5. Buka http://localhost:8080.** Pakai alamat ini persis: request dari origin lain (misalnya `127.0.0.1:8080`) ditolak
+**5. Jalankan worker di terminal lain.**
+
+```bash
+cd backend && go run ./cmd/worker
+```
+
+Worker adalah satu-satunya yang menjalankan SQL migration. Tanpa worker, pengajuan yang sudah disetujui tetap berstatus
+**Dalam antrean** dan berjalan begitu worker dinyalakan.
+
+**6. Buka http://localhost:8080.** Pakai alamat ini persis: request dari origin lain (misalnya `127.0.0.1:8080`) ditolak
 oleh pemeriksaan `Origin`, sehingga login, simpan, dan logout gagal dengan 403. Di halaman login, klik salah satu **Akun demo**
 untuk mengisi form, lalu **Masuk**.
 
@@ -100,11 +110,25 @@ Daftar akun di halaman login hanya tampil di `bun run dev` atau pada build denga
 Alur demo singkat:
 
 1. Masuk sebagai `reviewer`: buka `toko`, lihat struktur dan data table. Tombol **Migration baru** tidak muncul.
-2. Masuk sebagai `developer`: buka `toko`, **Migration baru**, tulis SQL (misalnya `ALTER TABLE products ADD COLUMN sku text;`), **Simpan draft**, lalu **Jalankan**. Versi schema naik dan kolom baru terlihat di tab Struktur. SQL yang salah tercatat sebagai Gagal dan di-rollback.
-3. Alur review: `developer` mengajukan migration (status **Menunggu review**), lalu `developer` dan `reviewer` sama-sama membuka
-   **Antrean review** dan menekan **Setujui** (keduanya leader, jadi keduanya harus setuju). Setelah yang terakhir menyetujui, status
-   berubah **Disetujui**, **Dalam antrean**, lalu worker (`go run ./cmd/worker`) menjalankannya. `reviewer` juga bisa **Tolak**.
-4. Masuk sebagai `demo-admin`: buka **Groups** untuk mengatur anggota dan grant, **Koneksi database** untuk menambah atau menguji koneksi. Membuka `toko` ditolak sampai `demo-admin` dimasukkan ke group yang punya grant.
+2. Masuk sebagai `developer`: buka `toko`, **Migration baru**, isi up.sql `ALTER TABLE products ADD COLUMN sku text;` dan down.sql
+   `ALTER TABLE products DROP COLUMN sku;`, **Simpan draft**, lalu **Ajukan run**. Status menjadi **Menunggu review** dan halaman
+   memantau job itu.
+3. `developer` dan `reviewer` sama-sama membuka **Antrean review** dan menekan **Setujui** (keduanya leader, jadi keduanya harus
+   setuju). Setelah yang terakhir, status berjalan **Dalam antrean**, **Berjalan**, **Sukses**, dan kolom baru terlihat di tab
+   Struktur. `reviewer` juga bisa **Tolak**. Migration dengan SQL yang salah berakhir **Gagal** beserta SQLSTATE-nya.
+4. Di halaman migration, **Rollback** mengajukan SQL down dan **Forward** menjalankan SQL up lagi; keduanya lewat review dan worker.
+   **Riwayat eksekusi** menampilkan semua attempt, dan centang **Hide rollback** menyembunyikan pasangan yang dibatalkan.
+5. Migration data besar per batch: ajukan dulu migration normal yang membuat table besar,
+   up.sql `CREATE TABLE pesanan (id int PRIMARY KEY, total int NOT NULL DEFAULT 0); INSERT INTO pesanan (id) SELECT g FROM generate_series(1, 300000) g;`
+   dan down.sql `DROP TABLE pesanan;`. Setelah sukses, buat migration mode **Per-batch** dengan tabel `pesanan`, kolom `id`,
+   up.sql `UPDATE pesanan SET total = total + 1 WHERE id > $1 AND id <= $2`, down.sql yang mengurangi 1, dan ajukan dengan ukuran batch 2000.
+   Halaman eksekusi menampilkan batch dan row yang sudah committed selama berjalan. Matikan worker di tengah jalan (Ctrl+C atau
+   `kill -9`) lalu nyalakan lagi: job dilanjutkan dari batch berikutnya.
+6. Untuk melihat **partial**: tambahkan ke up.sql pembagian yang gagal mulai id tertentu, misalnya
+   `SET total = total + 1 / (CASE WHEN id > 100000 THEN 0 ELSE 1 END)`. Batch sebelum id itu tetap committed dan statusnya
+   **Sebagian**. Dari halaman migration, **Batalkan batch** menjalankan SQL down dalam urutan batch terbalik, dan **Lanjutkan**
+   meneruskan dari checkpoint terakhir. Selama partial, migration lain di database itu ditahan di antrean.
+7. Masuk sebagai `demo-admin`: buka **Groups** untuk mengatur anggota, leader, dan grant, **Koneksi database** untuk menambah atau menguji koneksi. Membuka `toko` ditolak sampai `demo-admin` dimasukkan ke group yang punya grant.
 
 ## Isi file .env
 
@@ -128,12 +152,20 @@ Backend membaca `backend/.env` lalu `.env` di root repo; variabel environment ya
 | `TARGET_QUERY_TIMEOUT` | `5s` | Batas waktu koneksi dan query explorer ke database target. |
 | `MIGRATION_LOCK_TIMEOUT` | `5s` | `lock_timeout` saat migration berjalan. |
 | `MIGRATION_STATEMENT_TIMEOUT` | `60s` | `statement_timeout` per statement migration. |
-| `MIGRATION_EXEC_TIMEOUT` | `2m` | Batas total satu eksekusi migration. |
+| `MIGRATION_EXEC_TIMEOUT` | `2m` | Batas total satu transaction migration (pada mode per-batch: satu batch). |
+| `AMQP_URL` | `amqp://datanest:datanest@localhost:15673/` | RabbitMQ. Wajib untuk worker. Bila kosong di server, pengajuan yang disetujui diterbitkan oleh sweeper worker. |
+| `WORKER_CONCURRENCY` | `4` | Jumlah job yang dijalankan satu proses worker sekaligus. |
+| `WORKER_MAX_ATTEMPTS` | `3` | Batas percobaan untuk kegagalan sementara, dan batas berapa kali SQL sebuah eksekusi boleh dimulai. |
+| `WORKER_LEASE` | `30s` | Masa sewa lock per database. |
+| `WORKER_HEARTBEAT` | `10s` | Jeda perpanjangan sewa; harus lebih pendek dari `WORKER_LEASE`. |
+| `WORKER_SWEEP_INTERVAL` | `5s` | Jeda sweeper mencari job yang perlu diterbitkan ulang atau dipulihkan. |
+| `WORKER_REPUBLISH_AFTER` | `30s` | Job yang sudah diterbitkan tetapi belum diklaim diterbitkan ulang setelah selama ini. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, atau `error`. Log berbentuk JSON di stdout. |
 | `TRACE_EXPORTER` | `console` | `console` menulis span ke stderr; `none` mematikan tracing. |
 | `TEST_PLATFORM_DSN`, `TEST_TARGET_DSN` | ke `test-pg` | Hanya untuk integration test. |
+| `TEST_AMQP_URL` | `amqp://datanest:datanest@localhost:15673/` | Hanya untuk integration test yang memakai RabbitMQ. |
 
-Port host database bisa diubah dengan `PLATFORM_PG_PORT`, `TARGET_PG_PORT`, dan `TEST_PG_PORT` saat `docker compose up`; sesuaikan DSN-nya. Koneksi demo dari seed selalu menunjuk `localhost:15433`, jadi bila `TARGET_PG_PORT` diubah, perbarui port koneksi di halaman Koneksi database.
+Port host bisa diubah dengan `PLATFORM_PG_PORT`, `TARGET_PG_PORT`, `TEST_PG_PORT`, `RABBITMQ_PORT`, dan `RABBITMQ_UI_PORT` saat `docker compose up`; sesuaikan DSN dan `AMQP_URL`-nya. Koneksi demo dari seed selalu menunjuk `localhost:15433`, jadi bila `TARGET_PG_PORT` diubah, perbarui port koneksi di halaman Koneksi database.
 
 ## Menjalankan lagi di hari berikutnya
 
@@ -147,7 +179,7 @@ docker compose up -d --wait
 cd backend && go run ./cmd/server
 ```
 
-Eksekusi migration asynchronous butuh proses worker terpisah dan RabbitMQ (ikut `docker compose up`); isi `AMQP_URL` di `.env`:
+dan worker di terminal lain:
 
 ```bash
 cd backend && go run ./cmd/worker
@@ -173,7 +205,7 @@ Data uji besar (satu `UPDATE` tanpa batch harus lebih dari 1 detik, lalu dataset
 cd backend && set -a && . ../.env && set +a && go test -tags=integration,bigdata -p 1 -run BigData -v ./internal/worker/
 ```
 
-Jumlah row diatur `BIGDATA_ROWS` (default 2.000.000). Test gagal dengan saran menaikkannya bila `UPDATE` tanpa batch selesai dalam 1 detik atau kurang. Hasil di mesin pengembang (Postgres 17 di Docker): 2.000.000 row, satu `UPDATE` 8,6 detik; per batch 100.000 row (20 batch) 6,9 detik, dengan hasil akhir yang sama.
+Jumlah row diatur `BIGDATA_ROWS` (default 2.000.000). Test gagal dengan saran menaikkannya bila `UPDATE` tanpa batch selesai dalam 1 detik atau kurang. Hasil pada 26 November 2026 (MacBook Air, Postgres 17 di Docker dengan data di tmpfs): 2.000.000 row, satu `UPDATE` tanpa batch 6,9 detik; per batch 100.000 row (20 batch) 9,2 detik, dengan hasil akhir yang sama. Mode per-batch tidak lebih cepat (tiap batch punya transaction, ledger, dan pencarian cursor sendiri); gunanya tiap transaction tetap pendek dan kegagalan tidak membatalkan batch yang sudah selesai.
 
 ## Reset dan troubleshooting
 
@@ -181,6 +213,7 @@ Jumlah row diatur `BIGDATA_ROWS` (default 2.000.000). Test gagal dengan saran me
 | --- | --- |
 | Server berhenti dengan pesan `CREDENTIALS_KEY` | Kunci kosong atau bukan 32 byte base64. Buat dengan `openssl rand -base64 32`. |
 | Server berhenti: `ADMIN_USERNAME and ADMIN_PASSWORD are required` | Belum ada Platform Admin. Jalankan seed, atau isi `ADMIN_PASSWORD`. |
+| Eksekusi yang disetujui tetap **Dalam antrean** | Worker belum jalan, atau `AMQP_URL` salah (worker berhenti dengan `AMQP_URL is required`). Nyalakan worker dan RabbitMQ. Bila halaman eksekusi menulis `HELD`, database itu ditahan eksekusi lain yang disebut di pesannya. |
 | Login, simpan, atau logout gagal 403 | Aplikasi dibuka dari origin selain `ALLOWED_ORIGIN`. Buka http://localhost:8080. |
 | `address already in use` | Port dipakai proses lain. Cari dengan `lsof -i :8080` (atau port lain), hentikan prosesnya. |
 | Koneksi database gagal saat Test | `target-pg` belum menyala, atau password koneksi dienkripsi dengan kunci lama. Nyalakan Docker; isi ulang password atau jalankan seed. |
