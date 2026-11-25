@@ -35,6 +35,9 @@ type State struct {
 	// Started holds every migration that has had an execution start, so a further
 	// attempt must be a forward, not a run.
 	Started map[uint]bool
+	// Open holds migrations with an execution that has not reached a final status
+	// (waiting for review or the queue, running, uncertain or partial).
+	Open map[uint]bool
 }
 
 // started is true once a worker picked the execution up; earlier statuses are requests.
@@ -46,13 +49,26 @@ func started(s models.ExecutionStatus) bool {
 	return false
 }
 
+// open is true until the execution reaches a final status.
+func open(s models.ExecutionStatus) bool {
+	switch s {
+	case models.ExecPendingReview, models.ExecApproved, models.ExecQueued, models.ExecRunning,
+		models.ExecUncertain, models.ExecPartial:
+		return true
+	}
+	return false
+}
+
 // Derive computes the State from all executions of one database, sorted by id.
 func Derive(events []Event) State {
-	st := State{Redo: map[uint]bool{}, Started: map[uint]bool{}}
+	st := State{Redo: map[uint]bool{}, Started: map[uint]bool{}, Open: map[uint]bool{}}
 	lastAttempt := map[uint]uint{} // migration -> id of its latest started run/forward
 	var lastRun uint                // id of the latest started run of any migration
 
 	for _, e := range events {
+		if open(e.Status) {
+			st.Open[e.MigrationID] = true
+		}
 		if !started(e.Status) {
 			continue
 		}
