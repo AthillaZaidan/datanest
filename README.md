@@ -673,3 +673,82 @@ di halaman **Groups**.
 - **`POST /api/migrations/:id/execute` dari Milestone 1 masih ada** dan menjalankan migration langsung tanpa review dan tanpa
   antrean. SPA tidak memakainya lagi (tombol di editor mengajukan lewat `POST /migrations/:id/executions`), tetapi pemanggil
   API langsung dengan hak EDIT masih bisa melewati approval sampai route itu dihapus.
+
+### 17. Log terstruktur, masking, dan tracing (Milestone 2)
+
+**Log.** Semua log berbentuk JSON satu baris di stdout (`log/slog`). Atribut tetap: `time`, `level`, `event`, `actor_id`,
+`actor`, `database_id`, `status`, `correlation_id`, `trace_id`, `span_id`. Untuk SQL: `query`, `duration_ms`, `rows`, `error`,
+`sqlstate`. Untuk eksekusi: `migration_id`, `execution_id`, `job_id` (sama dengan execution ID), `attempt`, `batch_no`; setiap baris worker juga memuat `actor_id` dan `actor` (pengaju). Nama event berbentuk `area.aksi`:
+`http.request`, `auth.login`, `authz.denied`, `explorer.query`, `execution.approved`, `execution.rejected`,
+`execution.canceled`, `queue.published`, `lock.acquired`, `lock.lost`, `sql.start`, `sql.result`, `sql.commit`, `sql.rollback`,
+`recovery.check`, `grant.changed`, `leader.changed`. Mulai, hasil, dan commit atau rollback sebuah SQL dicatat sebagai baris terpisah, masing-masing dengan `status`. Setiap query explorer ke database target dicatat sebagai satu baris `explorer.query` berisi teks query (dimasking), durasi, dan status; jumlah row tidak tersedia di jalur itu, jadi tidak dicatat. Pengajuan eksekusi dicatat sebagai `execution.requested`. Nama event dan atribut ada di satu tempat, `backend/internal/obs`.
+
+**Correlation ID** dibuat server untuk setiap request API (nilai dari klien diabaikan) dan dikirim balik di header
+`X-Request-ID`. Saat sebuah execution masuk antrean, ID itu disimpan di baris execution dan ikut di pesan; worker memakai ID
+yang sama, sehingga satu pengajuan dapat ditelusuri dari request sampai SQL-nya dengan `correlation_id`.
+
+**Masking** ada di satu tempat (`ReplaceAttr` pada handler `slog`): atribut berkunci `password`, `sid`, `session`, `csrf`,
+`token`, `authorization`, dan `cookie` (serta variannya) diganti `[REDACTED]`. Parameter query ikut dicatat sebagai
+atribut `params` (batas batch, atau limit dan offset pada explorer), dan teks error yang memuat `password=...` atau
+`user:password@` pada URL disamarkan. Pada atribut `query`, literal string
+(termasuk body dollar-quoted) diganti `'?'` dan komentar dibuang, memakai tokenizer yang sama dengan `sqlguard`. SQL yang
+persis tetap utuh di database (`sql_executed`), hanya log yang dimasking. **Batasan:** literal angka tidak dimasking, dan
+`WHERE id = 42` tampil apa adanya. Query string URL tidak pernah dicatat. Pesan dari `log.Printf` lama (misalnya error session
+store) ikut keluar sebagai JSON, tetapi sebagai teks bebas di atribut `event`, bukan atribut terstruktur.
+
+**Tracing.** OpenTelemetry SDK dengan exporter console (span ditulis ke stderr; `TRACE_EXPORTER=none` mematikannya). Setiap
+request yang mengubah data (`POST`, `PUT`, `PATCH`, `DELETE`) memulai trace dengan satu span bernama `METODE route`; request
+`GET` tidak diberi span karena SPA memanggilnya berulang untuk polling dan akan membanjiri keluaran. Trace berlanjut melewati
+antrean ke worker:
+
+| Span | Induk |
+| --- | --- |
+| `POST /api/executions/:executionId/approve` (span request) | (akar) |
+| `api.approve` | span request |
+| `queue.publish` | `api.approve` |
+| `worker.process` | `queue.publish` |
+| `lock.acquire` | `worker.process` |
+| `execute` | `worker.process` |
+| `batch[n]` (mode per-batch) | `execute` |
+| `sql.query` | `execute`, atau `batch[n]` |
+
+Setiap pesan membawa `traceparent` milik span `queue.publish`, sehingga worker menyambung ke penerbitan itu. Konteks `api.approve`
+juga disimpan di kolom `traceparent` pada execution; dipakai bila pesan tidak membawa konteks, dan oleh sweeper atau pemulihan
+yang menerbitkan pesan baru, supaya trace tetap menyambung. Karena itu satu persetujuan bisa menghasilkan lebih dari satu span
+`queue.publish` bila sweeper menerbitkan ulang sebelum penanda "sudah terbit" tertulis; pesan ganda aman karena klaim
+`queued → running` hanya dimenangkan satu pesan.
+
+Contoh nyata dari satu persetujuan (UPDATE sederhana yang dijalankan worker lewat RabbitMQ; keluaran asli dari integration test):
+
+```json
+{"time":"2026-11-25T18:13:58.2552001+07:00","level":"INFO","event":"http.request","method":"POST","path":"/api/executions/1/approve","status":200,"duration_ms":124,"actor_id":2,"trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"9d1a333ed7dd8c8f","correlation_id":"b2235169ada375e7"}
+{"time":"2026-11-25T18:13:58.1688993+07:00","level":"INFO","event":"execution.approved","actor_id":2,"actor":"reviewer","migration_id":1,"execution_id":1,"job_id":1,"database_id":1,"status":"approved","trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"6ff8da75d26af419","correlation_id":"b2235169ada375e7"}
+{"time":"2026-11-25T18:13:58.2451506+07:00","level":"INFO","event":"lock.acquired","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"actor_id":1,"actor":"developer","owner":"test/1","lock_token":1,"trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"22ff56b33eabb594","correlation_id":"b2235169ada375e7"}
+{"time":"2026-11-25T18:13:58.2758092+07:00","level":"INFO","event":"sql.start","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"actor_id":1,"actor":"developer","attempt":1,"batch_no":0,"status":"started","query":"UPDATE items SET tag = '?' WHERE qty = 0","trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"c544933e2e334450","correlation_id":"b2235169ada375e7"}
+{"time":"2026-11-25T18:13:58.2768433+07:00","level":"INFO","event":"sql.result","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"actor_id":1,"actor":"developer","attempt":1,"batch_no":0,"status":"ok","duration_ms":1,"rows":95,"trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"c544933e2e334450","correlation_id":"b2235169ada375e7"}
+{"time":"2026-11-25T18:13:58.2792848+07:00","level":"INFO","event":"sql.commit","execution_id":1,"job_id":1,"migration_id":1,"database_id":1,"actor_id":1,"actor":"developer","attempt":1,"batch_no":0,"status":"committed","rows":95,"trace_id":"75f9bdfe27653dfb6d240ff0876f34c9","span_id":"6c35be4bc387e1f1","correlation_id":"b2235169ada375e7"}
+```
+
+Perhatikan literal `'rahasia'` pada SQL aslinya sudah menjadi `'?'` di log, dan `trace_id` serta `correlation_id` sama dari
+request sampai commit (`correlation_id` sama dengan header `X-Request-ID` respons). Baris worker membawa `actor` (pengaju),
+`migration_id`, dan `job_id`.
+
+Keluaran exporter console untuk dua span dari trace yang sama (`75f9bdfe27653dfb6d240ff0876f34c9`); span lain tersusun seperti tabel di bawahnya:
+
+```json
+{"Name":"POST /api/executions/:executionId/approve","SpanContext":{"TraceID":"75f9bdfe27653dfb6d240ff0876f34c9","SpanID":"9d1a333ed7dd8c8f","TraceFlags":"01","TraceState":"","Remote":false},"Parent":{"TraceID":"00000000000000000000000000000000","SpanID":"0000000000000000","TraceFlags":"00","TraceState":"","Remote":false},"SpanKind":1,"StartTime":"2026-11-25T18:13:58.1302448+07:00","EndTime":"2026-11-25T18:13:58.2552001+07:00","Attributes":[{"Key":"method","Value":{"Type":"STRING","Value":"POST"}},{"Key":"http.status_code","Value":{"Type":"INT64","Value":200}}],"Events":null,"Links":null,"Status":{"Code":"Unset","Description":""},"DroppedAttributes":0,"DroppedEvents":0,"DroppedLinks":0,"ChildSpanCount":1,"Resource":[{"Key":"service.name","Value":{"Type":"STRING","Value":"unknown_service:worker.test.exe"}},{"Key":"telemetry.sdk.language","Value":{"Type":"STRING","Value":"go"}},{"Key":"telemetry.sdk.name","Value":{"Type":"STRING","Value":"opentelemetry"}},{"Key":"telemetry.sdk.version","Value":{"Type":"STRING","Value":"1.47.0"}}],"InstrumentationScope":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null},"InstrumentationLibrary":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null}}
+{"Name":"sql.query","SpanContext":{"TraceID":"75f9bdfe27653dfb6d240ff0876f34c9","SpanID":"c544933e2e334450","TraceFlags":"01","TraceState":"","Remote":false},"Parent":{"TraceID":"75f9bdfe27653dfb6d240ff0876f34c9","SpanID":"6c35be4bc387e1f1","TraceFlags":"01","TraceState":"","Remote":false},"SpanKind":1,"StartTime":"2026-11-25T18:13:58.2758092+07:00","EndTime":"2026-11-25T18:13:58.2768433+07:00","Attributes":null,"Events":null,"Links":null,"Status":{"Code":"Unset","Description":""},"DroppedAttributes":0,"DroppedEvents":0,"DroppedLinks":0,"ChildSpanCount":0,"Resource":[{"Key":"service.name","Value":{"Type":"STRING","Value":"unknown_service:worker.test.exe"}},{"Key":"telemetry.sdk.language","Value":{"Type":"STRING","Value":"go"}},{"Key":"telemetry.sdk.name","Value":{"Type":"STRING","Value":"opentelemetry"}},{"Key":"telemetry.sdk.version","Value":{"Type":"STRING","Value":"1.47.0"}}],"InstrumentationScope":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null},"InstrumentationLibrary":{"Name":"github.com/AthillaZaidan/datanest","Version":"","SchemaURL":"","Attributes":null}}
+```
+
+| Span | span_id | induk |
+| --- | --- | --- |
+| `POST /api/executions/:executionId/approve` | `9d1a333ed7dd8c8f` | - |
+| `api.approve` | `6ff8da75d26af419` | `POST /api/executions/:executionId/approve` |
+| `queue.publish` | `3283229004820247` | `api.approve` |
+| `worker.process` | `22ff56b33eabb594` | `queue.publish` |
+| `lock.acquire` | `c7642825056b679c` | `worker.process` |
+| `execute` | `6c35be4bc387e1f1` | `worker.process` |
+| `sql.query` | `c544933e2e334450` | `execute` |
+
+Span yang gagal (`sql.query`, `execute`, dan `worker.process`) diberi status `Error` beserta pesan errornya, dan span request
+berstatus `Error` untuk respons 5xx.
