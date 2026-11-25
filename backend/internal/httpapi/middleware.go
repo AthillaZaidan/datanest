@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -10,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 	"github.com/AthillaZaidan/datanest/backend/internal/reqctx"
 )
@@ -47,6 +50,19 @@ func RequestLogger() gin.HandlerFunc {
 			}
 			span.End()
 		}
+	}
+}
+
+func Recovery() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		defer func() {
+			if p := recover(); p != nil {
+				slog.ErrorContext(c.Request.Context(), obs.EventHTTPPanic, obs.AttrMethod, c.Request.Method, obs.AttrPath, c.Request.URL.Path,
+					obs.AttrError, fmt.Sprint(p), "stack", string(debug.Stack()))
+				RespondError(c, apperr.ErrInternal)
+			}
+		}()
+		c.Next()
 	}
 }
 
