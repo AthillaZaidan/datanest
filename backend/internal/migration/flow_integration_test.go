@@ -115,6 +115,14 @@ func (f *flow) has(table string) bool {
 	return ok
 }
 
+func valueOf[T any](p *T) T {
+	var v T
+	if p != nil {
+		v = *p
+	}
+	return v
+}
+
 func errCode(err error) string {
 	var e *apperr.Error
 	if errors.As(err, &e) {
@@ -357,8 +365,8 @@ func TestRevalidateAcceptsARetryAfterARunThatNeverStarted(t *testing.T) {
 		}
 		var m models.Migration
 		f.platform.First(&m, a)
-		if m.Version == nil || *m.Version != 1 {
-			t.Fatalf("version after attempt %d = %v, want 1", attempt, m.Version)
+		if version := valueOf(m.Version); version != 1 {
+			t.Fatalf("version after attempt %d = %d, want 1", attempt, version)
 		}
 	}
 }
@@ -378,8 +386,8 @@ func TestAPartialExecutionIsContinuedOrUndone(t *testing.T) {
 	}
 	refersTo := func(step string, got *uint, want uint) {
 		t.Helper()
-		if (got == nil) != (want == 0) || (got != nil && *got != want) {
-			t.Errorf("%s = %v, want %d", step, got, want)
+		if id := valueOf(got); id != want {
+			t.Errorf("%s = %d, want %d", step, id, want)
 		}
 	}
 
@@ -427,6 +435,8 @@ func TestAPartialExecutionIsContinuedOrUndone(t *testing.T) {
 	check("undone", false, true)
 }
 
+const msgReferenceChanged = "Eksekusi yang dibatalkan atau dilanjutkan sudah berubah sejak permintaan ini disetujui."
+
 func TestRevalidateRefusesAChangedContinuation(t *testing.T) {
 	f := setupFlow(t)
 	a := f.recipe("CREATE TABLE IF NOT EXISTS a (id int)", "DROP TABLE IF EXISTS a")
@@ -439,8 +449,23 @@ func TestRevalidateRefusesAChangedContinuation(t *testing.T) {
 		t.Fatalf("revalidate = %v", err)
 	}
 	e.ContinuesExecutionID = nil
-	if err := f.svc.Revalidate(f.ctx, e); err == nil {
-		t.Error("revalidate accepted a forward that no longer continues the partial execution")
+	if err := f.svc.Revalidate(f.ctx, e); err == nil || err.Error() != msgReferenceChanged {
+		t.Errorf("revalidate of a forward that no longer continues the partial execution = %v, want %q", err, msgReferenceChanged)
+	}
+}
+
+func TestRevalidateRefusesAChangedRollbackTarget(t *testing.T) {
+	f := setupFlow(t)
+	a := f.recipe("CREATE TABLE a (id int)", "DROP TABLE a")
+	f.do(a, models.ExecKindRun)
+	e, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := *e.RevertsExecutionID + 1000
+	e.RevertsExecutionID = &other
+	if err := f.svc.Revalidate(f.ctx, e); err == nil || err.Error() != msgReferenceChanged {
+		t.Errorf("revalidate of a rollback of another execution = %v, want %q", err, msgReferenceChanged)
 	}
 }
 
