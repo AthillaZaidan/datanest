@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -301,5 +302,46 @@ func TestRevalidateRefusesChangedSQL(t *testing.T) {
 	f.platform.First(&m, a)
 	if m.Version != nil || m.FrozenAt != nil {
 		t.Errorf("refused revalidation still versioned or froze the recipe: %+v", m)
+	}
+}
+
+func TestSubmitRefusesTransactionControlHiddenInAnEscapeString(t *testing.T) {
+	f := setupFlow(t)
+	id := f.recipe("CREATE TABLE leaked (id int); SELECT E'\\''; COMMIT; SELECT 1/0; --'", "DROP TABLE leaked")
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, id, models.ExecKindRun); errCode(err) != "TRANSACTION_CONTROL_NOT_ALLOWED" {
+		t.Fatalf("submit = %v", err)
+	}
+	if f.has("leaked") {
+		t.Fatal("refused migration created a table")
+	}
+}
+
+func TestRunForcesStandardConformingStringsOn(t *testing.T) {
+	f := setupFlow(t)
+	var dbName string
+	if err := f.target.QueryRow(`SELECT current_database()`).Scan(&dbName); err != nil {
+		t.Fatal(err)
+	}
+	quoted := `"` + strings.ReplaceAll(dbName, `"`, `""`) + `"`
+	if _, err := f.target.Exec(`ALTER DATABASE ` + quoted + ` SET standard_conforming_strings = off`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := f.target.Exec(`ALTER DATABASE ` + quoted + ` RESET standard_conforming_strings`); err != nil {
+			t.Error(err)
+		}
+	})
+	f.target.SetMaxIdleConns(0)
+
+	id := f.recipe("CREATE TABLE seen AS SELECT current_setting('standard_conforming_strings') AS value", "DROP TABLE seen")
+	if run := f.do(id, models.ExecKindRun); run.Status != models.ExecSuccess {
+		t.Fatalf("run = %s", run.Status)
+	}
+	var value string
+	if err := f.target.QueryRow(`SELECT value FROM seen`).Scan(&value); err != nil {
+		t.Fatal(err)
+	}
+	if value != "on" {
+		t.Fatalf("standard_conforming_strings = %q during the run", value)
 	}
 }
