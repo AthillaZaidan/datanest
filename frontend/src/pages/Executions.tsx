@@ -9,7 +9,7 @@ import { useAsync } from '../hooks/useAsync'
 import { formatTime } from '../utils/format'
 
 const what = (e: HistoryItem) =>
-  `${e.version ? `v${e.version}` : `#${e.migrationId}`} ${e.kind}${e.revertsExecutionId ? ` (membatalkan E${e.revertsExecutionId})` : ''}`
+  `${e.version ? `v${e.version}` : `#${e.migrationId}`}${e.revision > 0 ? ` rev ${e.revision}` : ''} ${e.kind}${e.revertsExecutionId ? ` (membatalkan E${e.revertsExecutionId})` : ''}`
 
 // Every attempt, oldest first. Hide rollback filters out each successful rollback together with
 // the execution it reverted, matched by execution ID on the server; nothing is deleted.
