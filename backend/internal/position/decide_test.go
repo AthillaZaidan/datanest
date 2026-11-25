@@ -54,6 +54,11 @@ func TestDecide(t *testing.T) {
 			Derive([]Event{ev(1, a, run, ok), undo(2, a, 1, ok), ev(3, b, run, ok)}), mig(a), forward, "FORWARD_NOT_ALLOWED", "", 0},
 		{"a second request while one is open is refused",
 			Derive([]Event{ev(1, a, run, ok), undo(2, a, 1, models.ExecPendingReview)}), mig(a), rollback, "EXECUTION_STATE_CONFLICT", "", 0},
+		{"run a reversible draft without down SQL is refused", st, &models.Migration{ID: draft, SQL: "up"}, run, "VALIDATION_ERROR", "", 0},
+		{"run an irreversible draft without a reason is refused", st, &models.Migration{ID: draft, SQL: "up", Irreversible: true}, run, "VALIDATION_ERROR", "", 0},
+		{"run an irreversible draft with a reason",
+			st, &models.Migration{ID: draft, SQL: "up", Irreversible: true, IrreversibleReason: "r"}, run, "", "up", 0},
+		{"rollback without down SQL is refused", st, &models.Migration{ID: b, SQL: "up"}, rollback, "ROLLBACK_NOT_ALLOWED", "", 0},
 		{"unknown kind", st, mig(a), "drop", "VALIDATION_ERROR", "", 0},
 	}
 	for _, tt := range tests {
