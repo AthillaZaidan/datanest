@@ -65,7 +65,7 @@ func partialID(s State) uint {
 }
 
 func TestDerive(t *testing.T) {
-	const a, b, c = 1, 2, 3
+	const a, b, c, d = 1, 2, 3, 4
 	tests := []struct {
 		name    string
 		events  []Event
@@ -177,6 +177,13 @@ func TestDerive(t *testing.T) {
 			[]Event{ev(1, a, run, partial), ev(2, b, run, failed)}, []uint{}, []uint{}, b, 1},
 		{"a partial run that is continued after another run failed is active",
 			[]Event{ev(1, a, run, partial), ev(2, b, run, failed), resume(3, a, 1, ok)}, []uint{a}, []uint{}, b, 0},
+		{"continuing a partial forward after another run failed discards the older failed runs",
+			[]Event{ev(1, a, run, failed), ev(2, b, run, failed), ev(3, b, forward, partial), ev(4, c, run, failed), resume(5, b, 3, ok)},
+			[]uint{b}, []uint{}, c, 0},
+		{"continuing a partial forward keeps the failed runs that came after it",
+			[]Event{ev(1, a, run, failed), ev(2, b, run, failed), ev(3, b, forward, partial), ev(4, c, run, failed), ev(5, d, run, failed),
+				resume(6, b, 3, ok)},
+			[]uint{b}, []uint{c}, d, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
