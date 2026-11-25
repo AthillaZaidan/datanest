@@ -39,19 +39,17 @@ type View struct {
 	ErrorCode    string                 `json:"errorCode,omitempty"`
 	BaseVersion  *int                   `json:"baseVersion"`
 	// BaseOutdated warns that the database moved on since this draft was written.
-	BaseOutdated bool       `json:"baseOutdated"`
-	Revision     int        `json:"revision"`
-	CreatedBy    string     `json:"createdBy"`
-	UpdatedBy    string     `json:"updatedBy,omitempty"`
-	ExecutedBy   string     `json:"executedBy,omitempty"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt"`
-	StartedAt    *time.Time `json:"startedAt"`
-	FinishedAt   *time.Time `json:"finishedAt"`
-	// LastExecution is the migration's newest execution, whatever its status.
-	LastExecution *LastExecution `json:"lastExecution"`
-	// Partial is set when the database's unsettled partial execution belongs to this migration.
-	Partial *PartialExecution `json:"partial"`
+	BaseOutdated  bool              `json:"baseOutdated"`
+	Revision      int               `json:"revision"`
+	CreatedBy     string            `json:"createdBy"`
+	UpdatedBy     string            `json:"updatedBy,omitempty"`
+	ExecutedBy    string            `json:"executedBy,omitempty"`
+	CreatedAt     time.Time         `json:"createdAt"`
+	UpdatedAt     time.Time         `json:"updatedAt"`
+	StartedAt     *time.Time        `json:"startedAt"`
+	FinishedAt    *time.Time        `json:"finishedAt"`
+	LastExecution *LastExecution    `json:"lastExecution"`
+	Partial       *PartialExecution `json:"partial"`
 }
 
 func toView(m *models.Migration, p snapshot) View {
