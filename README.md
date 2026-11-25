@@ -616,3 +616,60 @@ kebenaran dibaca dari ledger.
 - Tidak ada dead-letter queue; execution yang gagal tetap tersimpan sebagai baris `failed` yang dapat dilihat dan di-forward ulang.
 - Tombol "Jalankan" M1 (`POST /api/migrations/:id/execute`) masih sinkron sampai alur pengajuan dan approval menggantikannya;
   eksekusi M1 tidak lewat antrean.
+
+### 16. Leader per group dan alur review (Milestone 2)
+
+Setiap pengajuan (run, forward, atau rollback) adalah satu baris `migration_executions` yang melewati
+`pending_review` → `approved` → `queued` sebelum worker menjalankannya. Status milik execution, bukan milik migration, supaya
+rollback dan forward juga wajib melewati review yang baru.
+
+**Leader.** Kolom `groups.leader_id` (boleh kosong): satu leader per group, harus anggota group, hanya Platform Admin yang
+mengatur (`PUT/DELETE /api/admin/groups/:groupId/leader`, halaman **Groups**). Seorang user boleh memimpin beberapa group. Bila
+leader keluar dari group atau user-nya dihapus, group menjadi tanpa leader.
+
+**Daftar penyetuju dihitung langsung** (bukan disalin saat pengajuan): `DISTINCT leader_id` dari semua group yang punya grant
+(VIEW atau EDIT) ke database itu. Seseorang yang memimpin dua group dihitung sekali. Karena dihitung ulang terus, berpindahnya
+leader langsung mengubah siapa yang harus setuju.
+
+**Persetujuan atas nama orang.** Table `migration_approvals` (`execution_id`, `user_id`, salinan `username`, `created_at`,
+`revoked_at`), append-only: mencabut persetujuan mengisi `revoked_at`, tidak menghapus baris. Persetujuan Sari tidak pindah ke
+Joko bila leader berganti; persetujuan orang yang sudah keluar dari daftar diabaikan. Syarat lolos: setiap orang di daftar live
+punya persetujuan yang belum dicabut.
+
+**Titik kunci.** Menyetujui, menolak, dan menarik berjalan dalam transaction yang mengunci baris execution, dan setiap transisi
+memakai `UPDATE ... WHERE status = <status sebelumnya>`, sehingga klik ganda atau dua leader yang menyetujui bersamaan
+menghasilkan tepat satu transisi. Saat persetujuan terakhir masuk, execution menjadi `approved`; langkah berikutnya mengecek
+daftar penyetuju sekali lagi dalam satu transaction. Bila ada penyetuju baru yang belum setuju, status kembali ke
+`pending_review`; bila lengkap, status menjadi `queued` (disimpan `correlation_id` dan `traceparent` request itu) lalu pesan
+dipublikasikan. Gagal publish tidak membatalkan apa pun: sweeper worker menerbitkan execution `queued` yang belum terbit, dan
+juga menuntaskan execution yang tertinggal di `approved` lebih dari 10 detik. Setelah `queued`, daftar tidak dihitung lagi.
+
+**Aksi dan hak.**
+
+| Aksi | Siapa | Dari status |
+| --- | --- | --- |
+| `approve` | leader di daftar penyetuju (level VIEW cukup; leader VIEW tetap tidak boleh membuat atau mengedit) | `pending_review` |
+| `reject` | leader di daftar penyetuju, alasan opsional | `pending_review`, `approved` |
+| `cancel` | pengaju | `pending_review`, `approved` |
+| `withdraw` (cabut persetujuan sendiri) | yang sudah menyetujui | `pending_review`, `approved` (kembali ke `pending_review`) |
+
+Yang bukan leader mendapat `403 NOT_AN_APPROVER`; yang tidak punya akses ke database mendapat `403 FORBIDDEN`; aksi pada status
+yang tidak sesuai mendapat `409 EXECUTION_STATE_CONFLICT`. Selama ada execution terbuka SQL resep tidak bisa diedit; migration
+yang ditolak atau ditarik tetap bisa diperbaiki dan diajukan lagi. SPA menampilkan tombol sesuai `permissions` dari server
+(hanya untuk UX), antrean di **Antrean review** (`GET /api/approvals/pending`, diperbarui tiap 10 detik), dan pengaturan leader
+di halaman **Groups**.
+
+**Asumsi dan risiko** (spek tidak mengatur):
+- **Group tanpa leader gagal tertutup.** Selama ada group dengan grant ke sebuah database yang belum punya leader, perubahan
+  di database itu tidak bisa disetujui (`409 GROUP_WITHOUT_LEADER`, dan halaman eksekusi menulis "Group X belum punya leader").
+  Dipilih daripada melewati group itu, karena menghapus seorang leader akan diam-diam menghilangkan veto timnya. Seed demo
+  menetapkan leader (`developer` untuk Tim Developer, `reviewer` untuk Tim Reviewer); group dari Milestone 1 lain harus diberi
+  leader oleh admin.
+- **Menyetujui pengajuan sendiri diperbolehkan.** Spek diam soal ini, dan melarangnya membuat database yang seluruh timnya
+  dipimpin satu orang tidak bisa diubah sama sekali.
+- **Platform Admin dapat mengubah leader dan grant**, sehingga secara teknis dapat mengatur siapa yang menyetujui (admin yang
+  menempatkan dirinya ke group dengan grant lalu menjadi leader). Ini tidak dicegah, hanya dicatat: setiap perubahan grant
+  dan leader masuk log terstruktur (`grant.changed`, `leader.changed`) dengan pelaku dan database.
+- **`POST /api/migrations/:id/execute` dari Milestone 1 masih ada** dan menjalankan migration langsung tanpa review dan tanpa
+  antrean. SPA tidak memakainya lagi (tombol di editor mengajukan lewat `POST /migrations/:id/executions`), tetapi pemanggil
+  API langsung dengan hak EDIT masih bisa melewati approval sampai route itu dihapus.
