@@ -31,7 +31,9 @@ type Claimed struct {
 	Lease dblock.Lease
 	From  models.ExecutionStatus
 
-	span trace.Span
+	span   trace.Span
+	began  bool
+	fenced bool
 }
 
 func (cl *Claimed) bind(ctx context.Context) context.Context {
