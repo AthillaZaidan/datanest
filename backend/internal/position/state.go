@@ -89,6 +89,7 @@ func Derive(events []Event) State {
 			switch e.Status {
 			case models.ExecSuccess:
 				st.discard()
+				st.Partial = nil
 				st.Active = append(st.Active, applied)
 			case models.ExecPartial:
 				st.discard()
