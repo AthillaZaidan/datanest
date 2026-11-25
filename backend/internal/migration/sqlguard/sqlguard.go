@@ -139,6 +139,29 @@ func skip(sql string, i int) int {
 	return i
 }
 
+// MaskLiterals replaces string literals with '?' and drops comments.
+func MaskLiterals(sql string) string {
+	var b strings.Builder
+	for i := 0; i < len(sql); {
+		j := skip(sql, i)
+		if j == i {
+			b.WriteByte(sql[i])
+			i++
+			continue
+		}
+		switch seg := sql[i:j]; {
+		case seg[0] == '\'' || seg[0] == '$':
+			b.WriteString("'?'")
+		case seg[0] == '-' || seg[0] == '/':
+			b.WriteByte(' ')
+		default:
+			b.WriteString(seg)
+		}
+		i = j
+	}
+	return b.String()
+}
+
 func isWord(b byte) bool { return b == '_' || unicode.IsLetter(rune(b)) || unicode.IsDigit(rune(b)) }
 func dollarEnd(sql string, i int) string {
 	j := i + 1
