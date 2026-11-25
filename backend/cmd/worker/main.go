@@ -15,8 +15,10 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/config"
 	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
+	"github.com/AthillaZaidan/datanest/backend/internal/migration"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
 	"github.com/AthillaZaidan/datanest/backend/internal/queue"
 	"github.com/AthillaZaidan/datanest/backend/internal/worker"
@@ -26,6 +28,30 @@ func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// newWorker builds the worker with B's revalidation hook: the request is re-checked
+// (version rules, frozen SQL) under the database lock before it runs.
+func newWorker(db *gorm.DB, targets dbconn.TargetDBProvider, cfg *config.Config) *worker.Worker {
+	host, _ := os.Hostname()
+	w := worker.New(db, targets, worker.Config{
+		WorkerID:         fmt.Sprintf("%s-%d", host, os.Getpid()),
+		Concurrency:      cfg.Worker.Concurrency,
+		MaxAttempts:      cfg.Worker.MaxAttempts,
+		LeaseTTL:         cfg.Worker.LeaseTTL,
+		HeartbeatEvery:   cfg.Worker.HeartbeatInterval,
+		RepublishAfter:   cfg.Worker.RepublishAfter,
+		LockTimeout:      cfg.Target.MigrationLockTimeout,
+		StatementTimeout: cfg.Target.MigrationStatementTimeout,
+		ExecTimeout:      cfg.Target.MigrationExecTimeout,
+	})
+	migrationService := migration.New(db, targets, authz.New(db), migration.Options{
+		LockTimeout:      cfg.Target.MigrationLockTimeout,
+		StatementTimeout: cfg.Target.MigrationStatementTimeout,
+		ExecTimeout:      cfg.Target.MigrationExecTimeout,
+	})
+	w.Revalidate = migrationService.Revalidate
+	return w
 }
 
 func run() error {
@@ -62,18 +88,7 @@ func run() error {
 	pools := dbconn.NewPools(db, cipher, cfg.Target.QueryTimeout)
 	defer pools.Close()
 
-	host, _ := os.Hostname()
-	w := worker.New(db, pools, worker.Config{
-		WorkerID:         fmt.Sprintf("%s-%d", host, os.Getpid()),
-		Concurrency:      cfg.Worker.Concurrency,
-		MaxAttempts:      cfg.Worker.MaxAttempts,
-		LeaseTTL:         cfg.Worker.LeaseTTL,
-		HeartbeatEvery:   cfg.Worker.HeartbeatInterval,
-		RepublishAfter:   cfg.Worker.RepublishAfter,
-		LockTimeout:      cfg.Target.MigrationLockTimeout,
-		StatementTimeout: cfg.Target.MigrationStatementTimeout,
-		ExecTimeout:      cfg.Target.MigrationExecTimeout,
-	})
+	w := newWorker(db, pools, cfg)
 	publisher := queue.NewPublisher(cfg.AMQPURL, queue.JobsQueue)
 	defer publisher.Close()
 	w.Publisher = publisher
