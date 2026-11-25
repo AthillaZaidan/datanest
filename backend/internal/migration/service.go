@@ -12,6 +12,7 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/position"
 )
 
 type Authorizer interface {
@@ -237,13 +238,9 @@ func (s *Service) requireDatabase(ctx context.Context, databaseID uint) error {
 	return nil
 }
 
-// currentVersion is the latest successful version, or 0.
+// currentVersion is the version of the top active migration, or 0 when none is active.
 func (s *Service) currentVersion(ctx context.Context, databaseID uint) (int, error) {
-	var v int
-	err := s.platform.WithContext(ctx).Model(&models.Migration{}).
-		Where("database_id = ? AND status = ?", databaseID, models.MigrationSuccess).
-		Select("COALESCE(MAX(version), 0)").Scan(&v).Error
-	return v, err
+	return position.Current(ctx, s.platform, databaseID)
 }
 
 func (s *Service) user(ctx context.Context, userID uint) (*models.User, error) {
