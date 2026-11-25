@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"gorm.io/gorm"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
@@ -77,11 +78,11 @@ func (s *Service) start(ctx context.Context, migrationID, databaseID uint, u *mo
 		UPDATE migrations SET
 			status = ?,
 			version = (SELECT COALESCE(MAX(version), 0) + 1 FROM migrations WHERE database_id = ?),
-			started_at = ?, updated_at = ?,
+			started_at = ?, updated_at = ?, frozen_at = ?,
 			executed_by_id = ?, executed_by_username = ?
 		WHERE id = ? AND status = ?
 		RETURNING version`,
-		models.MigrationRunning, databaseID, now, now, u.ID, u.Username, migrationID, models.MigrationDraft,
+		models.MigrationRunning, databaseID, now, now, now, u.ID, u.Username, migrationID, models.MigrationDraft,
 	).Scan(&versions).Error
 	if err != nil {
 		return 0, err
@@ -127,14 +128,21 @@ func (s *Service) finish(ctx context.Context, migrationID uint, runErr error) er
 		msg, code = failure(runErr)
 	}
 	now := time.Now()
-	return s.platform.WithContext(ctx).Model(&models.Migration{}).Where("id = ?", migrationID).
-		Updates(map[string]any{
-			"status":        status,
-			"error_message": msg,
-			"error_code":    code,
-			"finished_at":   now,
-			"updated_at":    now,
-		}).Error
+	return s.platform.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		err := tx.Model(&models.Migration{}).Where("id = ?", migrationID).
+			Updates(map[string]any{
+				"status":        status,
+				"error_message": msg,
+				"error_code":    code,
+				"finished_at":   now,
+				"updated_at":    now,
+			}).Error
+		if err != nil {
+			return err
+		}
+		// The run joins the execution history the active position is derived from.
+		return models.RecordLegacyRun(tx, migrationID)
+	})
 }
 
 // failure turns an execution error into a message and SQLSTATE for the history.

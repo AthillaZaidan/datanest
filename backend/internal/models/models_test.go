@@ -101,6 +101,19 @@ func TestDeleteBehaviour(t *testing.T) {
 	}
 }
 
+func TestMigrationRecipeColumns(t *testing.T) {
+	s := parse(t, &Migration{})
+	for field, column := range map[string]string{
+		"SQL": "sql", "SQLDown": "sql_down", "Irreversible": "irreversible",
+		"IrreversibleReason": "irreversible_reason", "FrozenAt": "frozen_at",
+	} {
+		f := s.LookUpField(field)
+		if f == nil || f.DBName != column {
+			t.Errorf("Migration.%s column = %v, want %s", field, f, column)
+		}
+	}
+}
+
 func TestSecretFieldsHiddenFromJSON(t *testing.T) {
 	for model, field := range map[any]string{&User{}: "PasswordHash", &DatabaseConnection{}: "PasswordEnc"} {
 		f := parse(t, model).LookUpField(field)

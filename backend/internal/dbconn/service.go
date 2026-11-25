@@ -6,6 +6,7 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/position"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"strings"
@@ -217,11 +218,9 @@ func (s *Service) TestSaved(ctx context.Context, id uint) (TestResult, error) {
 func (s *Service) ListForUser(ctx context.Context, uid uint) ([]View, error) {
 	var rows []struct {
 		models.DatabaseConnection
-		Level          int16
-		CurrentVersion int
+		Level int16
 	}
-	e := s.db.WithContext(ctx).Table("database_connections d").Select(`d.*, MAX(g.level) AS level,
- (SELECT COALESCE(MAX(m.version), 0) FROM migrations m WHERE m.database_id = d.id AND m.status = ?) AS current_version`, models.MigrationSuccess).Joins("JOIN grants g ON g.database_id = d.id").Joins("JOIN group_members gm ON gm.group_id = g.group_id").Where("gm.user_id = ?", uid).Group("d.id").Order("d.id").Scan(&rows).Error
+	e := s.db.WithContext(ctx).Table("database_connections d").Select(`d.*, MAX(g.level) AS level`).Joins("JOIN grants g ON g.database_id = d.id").Joins("JOIN group_members gm ON gm.group_id = g.group_id").Where("gm.user_id = ?", uid).Group("d.id").Order("d.id").Scan(&rows).Error
 	if e != nil {
 		return nil, e
 	}
@@ -229,7 +228,9 @@ func (s *Service) ListForUser(ctx context.Context, uid uint) ([]View, error) {
 	for _, m := range rows {
 		v := view(m.DatabaseConnection)
 		v.MyLevel = authz.Level(m.Level).String()
-		v.CurrentVersion = m.CurrentVersion
+		if v.CurrentVersion, e = position.Current(ctx, s.db, m.ID); e != nil {
+			return nil, e
+		}
 		out = append(out, v)
 	}
 	return out, nil
@@ -252,6 +253,6 @@ func (s *Service) GetForUser(ctx context.Context, uid, id uint) (View, error) {
 	}
 	v := view(m)
 	v.MyLevel = level.String()
-	e = s.db.WithContext(ctx).Model(&models.Migration{}).Select("COALESCE(MAX(version),0)").Where("database_id = ? AND status = ?", id, models.MigrationSuccess).Scan(&v.CurrentVersion).Error
+	v.CurrentVersion, e = position.Current(ctx, s.db, id)
 	return v, e
 }

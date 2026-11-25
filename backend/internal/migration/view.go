@@ -8,14 +8,24 @@ import (
 
 // View is the API shape of a migration.
 type View struct {
-	ID           uint                   `json:"id"`
-	DatabaseID   uint                   `json:"databaseId"`
-	Version      *int                   `json:"version"`
-	SQL          string                 `json:"sql"`
-	Status       models.MigrationStatus `json:"status"`
-	ErrorMessage string                 `json:"errorMessage,omitempty"`
-	ErrorCode    string                 `json:"errorCode,omitempty"`
-	BaseVersion  *int                   `json:"baseVersion"`
+	ID         uint `json:"id"`
+	DatabaseID uint `json:"databaseId"`
+	Version    *int `json:"version"`
+	// SQL is SQLUp under its Milestone 1 name, kept for older clients.
+	SQL                string                 `json:"sql"`
+	SQLUp              string                 `json:"sqlUp"`
+	SQLDown            string                 `json:"sqlDown"`
+	Irreversible       bool                   `json:"irreversible"`
+	IrreversibleReason string                 `json:"irreversibleReason,omitempty"`
+	FrozenAt           *time.Time             `json:"frozenAt"`
+	// Active and Forwardable come from the derived position (package position), the same
+	// source as the version rules, so the SPA never infers them from status or MAX(version).
+	Active      bool `json:"active"`
+	Forwardable bool `json:"forwardable"`
+	Status             models.MigrationStatus `json:"status"`
+	ErrorMessage       string                 `json:"errorMessage,omitempty"`
+	ErrorCode          string                 `json:"errorCode,omitempty"`
+	BaseVersion        *int                   `json:"baseVersion"`
 	// BaseOutdated warns that the database moved on since this draft was written.
 	BaseOutdated bool       `json:"baseOutdated"`
 	Revision     int        `json:"revision"`
@@ -28,29 +38,36 @@ type View struct {
 	FinishedAt   *time.Time `json:"finishedAt"`
 }
 
-func toView(m *models.Migration, currentVersion int) View {
+func toView(m *models.Migration, p snapshot) View {
 	base := 0
 	if m.BaseVersion != nil {
 		base = *m.BaseVersion
 	}
 	return View{
-		ID:           m.ID,
-		DatabaseID:   m.DatabaseID,
-		Version:      m.Version,
-		SQL:          m.SQL,
-		Status:       m.Status,
-		ErrorMessage: m.ErrorMessage,
-		ErrorCode:    m.ErrorCode,
-		BaseVersion:  m.BaseVersion,
-		BaseOutdated: m.Status == models.MigrationDraft && currentVersion > base,
-		Revision:     m.Revision,
-		CreatedBy:    userLabel(m.CreatedByID, m.CreatedByUsername),
-		UpdatedBy:    userLabel(m.UpdatedByID, m.UpdatedByUsername),
-		ExecutedBy:   userLabel(m.ExecutedByID, m.ExecutedByUsername),
-		CreatedAt:    m.CreatedAt,
-		UpdatedAt:    m.UpdatedAt,
-		StartedAt:    m.StartedAt,
-		FinishedAt:   m.FinishedAt,
+		ID:                 m.ID,
+		DatabaseID:         m.DatabaseID,
+		Version:            m.Version,
+		SQL:                m.SQL,
+		SQLUp:              m.SQL,
+		SQLDown:            m.SQLDown,
+		Irreversible:       m.Irreversible,
+		IrreversibleReason: m.IrreversibleReason,
+		FrozenAt:           m.FrozenAt,
+		Active:             p.state.IsActive(m.ID),
+		Forwardable:        p.hasNext && p.next == m.ID,
+		Status:             m.Status,
+		ErrorMessage:       m.ErrorMessage,
+		ErrorCode:          m.ErrorCode,
+		BaseVersion:        m.BaseVersion,
+		BaseOutdated:       m.Status == models.MigrationDraft && p.current > base,
+		Revision:           m.Revision,
+		CreatedBy:          userLabel(m.CreatedByID, m.CreatedByUsername),
+		UpdatedBy:          userLabel(m.UpdatedByID, m.UpdatedByUsername),
+		ExecutedBy:         userLabel(m.ExecutedByID, m.ExecutedByUsername),
+		CreatedAt:          m.CreatedAt,
+		UpdatedAt:          m.UpdatedAt,
+		StartedAt:          m.StartedAt,
+		FinishedAt:         m.FinishedAt,
 	}
 }
 

@@ -29,7 +29,7 @@ export default function SqlEditor({ value, onChange, readOnly, placeholder, labe
           ))}
         </div>
         <textarea
-          aria-label="SQL migration"
+          aria-label={`SQL ${label}`}
           className="h-80 min-w-0 flex-1 resize-none bg-sheet px-3 py-3 font-mono text-[13px] leading-6 text-ink placeholder:text-muted focus:outline-none read-only:text-neutral-ink"
           value={value}
           readOnly={readOnly}

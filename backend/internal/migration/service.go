@@ -3,7 +3,6 @@ package migration
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -12,6 +11,7 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/position"
 )
 
 type Authorizer interface {
@@ -66,13 +66,13 @@ func (s *Service) List(ctx context.Context, userID, databaseID uint, status stri
 	if err := q.Order("version DESC NULLS FIRST, id DESC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	current, err := s.currentVersion(ctx, databaseID)
+	p, err := s.position(ctx, databaseID)
 	if err != nil {
 		return nil, err
 	}
-	out := &ListResult{Migrations: make([]View, len(rows)), CurrentVersion: current}
+	out := &ListResult{Migrations: make([]View, len(rows)), CurrentVersion: p.current}
 	for i := range rows {
-		out.Migrations[i] = toView(&rows[i], current)
+		out.Migrations[i] = toView(&rows[i], p)
 	}
 	return out, nil
 }
@@ -85,28 +85,28 @@ func (s *Service) Get(ctx context.Context, userID, migrationID uint) (*View, err
 	return s.view(ctx, m)
 }
 
-func (s *Service) Create(ctx context.Context, userID, databaseID uint, sql string) (*View, error) {
+func (s *Service) Create(ctx context.Context, userID, databaseID uint, r Recipe) (*View, error) {
 	if err := s.requireDatabase(ctx, databaseID); err != nil {
 		return nil, err
 	}
 	if err := s.authorize(ctx, userID, databaseID, authz.CreateMigration); err != nil {
 		return nil, err
 	}
-	if err := validateSQL(sql); err != nil {
+	if err := r.validate(); err != nil {
 		return nil, err
 	}
-	return s.createDraft(ctx, userID, databaseID, sql)
+	return s.createDraft(ctx, userID, databaseID, r)
 }
 
-func (s *Service) Update(ctx context.Context, userID, migrationID uint, sql string, revision int) (*View, error) {
+func (s *Service) Update(ctx context.Context, userID, migrationID uint, r Recipe, revision int) (*View, error) {
 	m, err := s.loadAuthorized(ctx, userID, migrationID, authz.UpdateMigration)
 	if err != nil {
 		return nil, err
 	}
-	if m.Status != models.MigrationDraft {
+	if m.Status != models.MigrationDraft || m.FrozenAt != nil {
 		return nil, apperr.ErrMigrationNotDraft
 	}
-	if err := validateSQL(sql); err != nil {
+	if err := r.validate(); err != nil {
 		return nil, err
 	}
 	u, err := s.user(ctx, userID)
@@ -115,9 +115,13 @@ func (s *Service) Update(ctx context.Context, userID, migrationID uint, sql stri
 	}
 
 	res := s.platform.WithContext(ctx).Model(&models.Migration{}).
-		Where("id = ? AND status = ? AND revision = ?", migrationID, models.MigrationDraft, revision).
+		Where("id = ? AND status = ? AND revision = ? AND frozen_at IS NULL AND NOT EXISTS (?)",
+			migrationID, models.MigrationDraft, revision, openExecutions(s.platform, migrationID).Select("1")).
 		Updates(map[string]any{
-			"sql":                 sql,
+			"sql":                 r.SQLUp,
+			"sql_down":            r.SQLDown,
+			"irreversible":        r.Irreversible,
+			"irreversible_reason": r.IrreversibleReason,
 			"revision":            gorm.Expr("revision + 1"),
 			"updated_by_id":       u.ID,
 			"updated_by_username": u.Username,
@@ -129,8 +133,15 @@ func (s *Service) Update(ctx context.Context, userID, migrationID uint, sql stri
 		if err := s.platform.WithContext(ctx).First(m, migrationID).Error; err != nil {
 			return nil, err
 		}
-		if m.Status != models.MigrationDraft {
+		if m.Status != models.MigrationDraft || m.FrozenAt != nil {
 			return nil, apperr.ErrMigrationNotDraft
+		}
+		open, err := s.hasOpenExecution(ctx, migrationID)
+		if err != nil {
+			return nil, err
+		}
+		if open {
+			return nil, errOpenExecution
 		}
 		return nil, apperr.ErrRevisionConflict
 	}
@@ -141,7 +152,10 @@ func (s *Service) Delete(ctx context.Context, userID, migrationID uint) error {
 	if _, err := s.loadAuthorized(ctx, userID, migrationID, authz.DeleteMigration); err != nil {
 		return err
 	}
-	res := s.platform.WithContext(ctx).Where("id = ? AND status = ?", migrationID, models.MigrationDraft).
+	// Executions cascade with their migration, so a migration with any history is kept.
+	res := s.platform.WithContext(ctx).
+		Where("id = ? AND status = ? AND NOT EXISTS (?)", migrationID, models.MigrationDraft,
+			s.platform.Model(&models.MigrationExecution{}).Select("1").Where("migration_id = ?", migrationID)).
 		Delete(&models.Migration{})
 	if res.Error != nil {
 		return res.Error
@@ -158,25 +172,30 @@ func (s *Service) Duplicate(ctx context.Context, userID, migrationID uint) (*Vie
 	if err != nil {
 		return nil, err
 	}
-	return s.createDraft(ctx, userID, m.DatabaseID, m.SQL)
+	return s.createDraft(ctx, userID, m.DatabaseID, Recipe{SQLUp: m.SQL, SQLDown: m.SQLDown,
+		Irreversible: m.Irreversible, IrreversibleReason: m.IrreversibleReason})
 }
 
-func (s *Service) createDraft(ctx context.Context, userID, databaseID uint, sql string) (*View, error) {
+func (s *Service) createDraft(ctx context.Context, userID, databaseID uint, r Recipe) (*View, error) {
 	u, err := s.user(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	current, err := s.currentVersion(ctx, databaseID)
+	p, err := s.position(ctx, databaseID)
 	if err != nil {
 		return nil, err
 	}
+	current := p.current
 	m := models.Migration{
-		DatabaseID:        databaseID,
-		SQL:               sql,
-		Status:            models.MigrationDraft,
-		Revision:          1,
-		CreatedByID:       &u.ID,
-		CreatedByUsername: u.Username,
+		DatabaseID:         databaseID,
+		SQL:                r.SQLUp,
+		SQLDown:            r.SQLDown,
+		Irreversible:       r.Irreversible,
+		IrreversibleReason: r.IrreversibleReason,
+		Status:             models.MigrationDraft,
+		Revision:           1,
+		CreatedByID:        &u.ID,
+		CreatedByUsername:  u.Username,
 	}
 	if current > 0 {
 		m.BaseVersion = &current
@@ -184,16 +203,16 @@ func (s *Service) createDraft(ctx context.Context, userID, databaseID uint, sql 
 	if err := s.platform.WithContext(ctx).Create(&m).Error; err != nil {
 		return nil, err
 	}
-	v := toView(&m, current)
+	v := toView(&m, p)
 	return &v, nil
 }
 
 func (s *Service) view(ctx context.Context, m *models.Migration) (*View, error) {
-	current, err := s.currentVersion(ctx, m.DatabaseID)
+	p, err := s.position(ctx, m.DatabaseID)
 	if err != nil {
 		return nil, err
 	}
-	v := toView(m, current)
+	v := toView(m, p)
 	return &v, nil
 }
 
@@ -237,13 +256,21 @@ func (s *Service) requireDatabase(ctx context.Context, databaseID uint) error {
 	return nil
 }
 
-// currentVersion is the latest successful version, or 0.
-func (s *Service) currentVersion(ctx context.Context, databaseID uint) (int, error) {
-	var v int
-	err := s.platform.WithContext(ctx).Model(&models.Migration{}).
-		Where("database_id = ? AND status = ?", databaseID, models.MigrationSuccess).
-		Select("COALESCE(MAX(version), 0)").Scan(&v).Error
-	return v, err
+// snapshot is a database's derived position as the views need it.
+type snapshot struct {
+	state   position.State
+	current int
+	next    uint
+	hasNext bool
+}
+
+func (s *Service) position(ctx context.Context, databaseID uint) (snapshot, error) {
+	st, versions, err := position.Load(ctx, s.platform, databaseID, 0)
+	if err != nil {
+		return snapshot{}, err
+	}
+	next, ok := position.NextForward(st, versions)
+	return snapshot{state: st, current: position.ActiveVersion(st, versions), next: next, hasNext: ok}, nil
 }
 
 func (s *Service) user(ctx context.Context, userID uint) (*models.User, error) {
@@ -258,10 +285,8 @@ func (s *Service) user(ctx context.Context, userID uint) (*models.User, error) {
 	return &u, nil
 }
 
-func validateSQL(sql string) error {
-	if strings.TrimSpace(sql) == "" {
-		return apperr.ErrValidation.WithMessage("SQL migration wajib diisi.").
-			WithDetails(map[string]string{"sql": "wajib diisi"})
-	}
-	return nil
+func (s *Service) hasOpenExecution(ctx context.Context, migrationID uint) (bool, error) {
+	var n int64
+	err := openExecutions(s.platform.WithContext(ctx), migrationID).Count(&n).Error
+	return n > 0, err
 }

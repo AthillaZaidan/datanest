@@ -5,6 +5,7 @@ import Databases from './pages/Databases'
 import DatabaseDetail from './pages/DatabaseDetail'
 import Migrations from './pages/Migrations'
 import MigrationEditor from './pages/MigrationEditor'
+import Executions from './pages/Executions'
 import ExecutionStatus from './pages/ExecutionStatus'
 import AdminUsers from './pages/admin/Users'
 import AdminGroups from './pages/admin/Groups'
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="databases" element={<Databases />} />
         <Route path="databases/:databaseId" element={<DatabaseDetail />} />
         <Route path="databases/:databaseId/migrations" element={<Migrations />} />
+        <Route path="databases/:databaseId/executions" element={<Executions />} />
         <Route path="databases/:databaseId/migrations/new" element={<MigrationEditor />} />
         <Route path="migrations/:migrationId" element={<MigrationEditor />} />
         <Route path="executions/:executionId" element={<ExecutionStatus />} />

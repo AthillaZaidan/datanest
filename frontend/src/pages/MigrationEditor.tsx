@@ -4,17 +4,20 @@ import { ApiError } from '../api/client'
 import { getDatabase } from '../api/databases'
 import {
   type Migration,
+  type Recipe,
   createMigration,
   deleteMigration,
   duplicateMigration,
-  executeMigration,
   getMigration,
+  submitExecution,
   updateMigration,
 } from '../api/migrations'
-import { CopyIcon, PlayIcon, SaveIcon, TrashIcon } from '../components/icons'
+import type { ExecutionKind } from '../api/executions'
+import { ArrowLeftIcon, CopyIcon, PlayIcon, RefreshIcon, SaveIcon, TrashIcon } from '../components/icons'
 import { Alert, Loading, Meta, PageHeader } from '../components/kit'
 import PlanPanel from '../components/migrations/PlanPanel'
-import SqlEditor from '../components/migrations/SqlEditor'
+import RecipeEditor from '../components/migrations/RecipeEditor'
+import { emptyRecipe, recipeComplete, recipeOf, sameRecipe } from '../components/migrations/recipe'
 import StatusBadge from '../components/migrations/StatusBadge'
 import { ui } from '../components/ui'
 import { useCrumbs } from '../context/crumbs'
@@ -47,7 +50,7 @@ function crumbsFor(databaseId: number | string, name: string | undefined, last: 
 function NewMigration({ databaseId }: { databaseId: string }) {
   const navigate = useNavigate()
   const db = useDatabase(databaseId)
-  const [sql, setSql] = useState('')
+  const [recipe, setRecipe] = useState<Recipe>(emptyRecipe)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   useCrumbs(crumbsFor(databaseId, db?.name, 'Migration baru'))
@@ -56,7 +59,7 @@ function NewMigration({ databaseId }: { databaseId: string }) {
     setBusy(true)
     setError(null)
     try {
-      const m = await createMigration(databaseId, sql)
+      const m = await createMigration(databaseId, recipe)
       navigate(`/migrations/${m.id}`)
     } catch (e) {
       setError((e as Error).message)
@@ -74,10 +77,10 @@ function NewMigration({ databaseId }: { databaseId: string }) {
         <ViewOnlyNotice />
       ) : (
         <div className="max-w-[960px]">
-          <SqlEditor value={sql} onChange={setSql} placeholder="ALTER TABLE products ADD COLUMN sku text;" />
+          <RecipeEditor value={recipe} onChange={setRecipe} />
           {error && <div className="mt-4"><Alert>{error}</Alert></div>}
           <div className="mt-4 flex items-center gap-3">
-            <button className={ui.buttonPrimary} disabled={busy || !sql.trim()} onClick={save}>
+            <button className={ui.buttonPrimary} disabled={busy || !recipeComplete(recipe)} onClick={save}>
               <SaveIcon /> Simpan draft
             </button>
             <span className={ui.small}>Satu migration dijalankan dalam satu transaction. BEGIN, COMMIT, dan ROLLBACK tidak diperlukan.</span>
@@ -91,7 +94,7 @@ function NewMigration({ databaseId }: { databaseId: string }) {
 function ExistingMigration({ id }: { id: string }) {
   const navigate = useNavigate()
   const [migration, setMigration] = useState<Migration | null>(null)
-  const [sql, setSql] = useState('')
+  const [recipe, setRecipe] = useState<Recipe>(emptyRecipe)
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [busy, setBusy] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -105,7 +108,7 @@ function ExistingMigration({ id }: { id: string }) {
       (m) => {
         if (!active) return
         setMigration(m)
-        setSql(m.sql)
+        setRecipe(recipeOf(m))
         setError(null)
       },
       (e: Error) => active && setError(e),
@@ -130,17 +133,26 @@ function ExistingMigration({ id }: { id: string }) {
   if (!migration) return error ? <Alert>{error.message}</Alert> : <Loading rows={6} />
 
   const canEdit = db?.myLevel === 'EDIT'
-  const isDraft = migration.status === 'draft'
-  const dirty = sql !== migration.sql
+  // A draft whose first execution started is frozen: its SQL is kept exactly as it ran.
+  const isDraft = migration.status === 'draft' && !migration.frozenAt
+  const dirty = !sameRecipe(recipe, recipeOf(migration))
   const show = (m: Migration) => {
     setMigration(m)
-    setSql(m.sql)
+    setRecipe(recipeOf(m))
   }
 
-  const save = () => run(async () => show(await updateMigration(id, sql, migration.revision)))
-  const execute = () => {
-    if (!confirm('Jalankan migration ini pada database target?')) return
-    run(async () => show(await executeMigration(id)))
+  const save = () => run(async () => show(await updateMigration(id, recipe, migration.revision)))
+  const current = db?.currentVersion ?? 0
+  // The backend re-checks every rule (design D2); these only decide which buttons make sense.
+  const isTop = migration.active && migration.version === current
+  const canRollback = isTop && !migration.irreversible
+  const canForward = migration.forwardable
+  const submit = (kind: ExecutionKind, question: string) => {
+    if (!confirm(`${question} Permintaan masuk ke review sebelum dijalankan.`)) return
+    run(async () => {
+      const e = await submitExecution(id, kind)
+      navigate(`/executions/${e.id}`)
+    })
   }
   const remove = () => {
     if (!confirm('Hapus draft ini?')) return
@@ -157,16 +169,18 @@ function ExistingMigration({ id }: { id: string }) {
 
   const subtitle =
     migration.status === 'success'
-      ? `Dijalankan ${migration.executedBy} pada ${formatTime(migration.startedAt)}, selesai dalam ${duration(migration.startedAt, migration.finishedAt)}.`
+      ? `Dijalankan ${migration.executedBy} pada ${formatTime(migration.startedAt)}, selesai dalam ${duration(migration.startedAt, migration.finishedAt)}. Saat ini ${migration.active ? 'aktif' : 'tidak aktif'}.`
       : migration.status === 'failed'
         ? `Gagal saat dijalankan ${migration.executedBy} pada ${formatTime(migration.startedAt)}. Perubahan di-rollback, schema tetap di versi sebelumnya.`
         : migration.status === 'running'
           ? `Sedang dijalankan ${migration.executedBy} sejak ${formatTime(migration.startedAt)}.`
-          : `Draft dari ${migration.createdBy}, dibuat di atas versi ${migration.baseVersion ? `v${migration.baseVersion}` : 'awal'}.`
+          : migration.frozenAt
+            ? `v${migration.version} ${migration.active ? 'aktif' : 'tidak aktif'} pada database. Riwayat lengkap ada di halaman riwayat eksekusi.`
+            : `Draft dari ${migration.createdBy}, dibuat di atas versi ${migration.baseVersion ? `v${migration.baseVersion}` : 'awal'}.`
 
   return (
     <>
-      <PageHeader title={title} badges={<StatusBadge status={migration.status} />} subtitle={subtitle} />
+      <PageHeader title={title} badges={<StatusBadge migration={migration} />} subtitle={subtitle} />
 
       {db?.myLevel === 'VIEW' && <ViewOnlyNotice />}
 
@@ -191,7 +205,12 @@ function ExistingMigration({ id }: { id: string }) {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_288px] lg:items-start">
         <div className="min-w-0 space-y-4">
-          <SqlEditor value={sql} readOnly={!isDraft || !canEdit} onChange={setSql} />
+          {migration.frozenAt && (
+            <Alert tone="info">
+              SQL terkunci sejak {formatTime(migration.frozenAt)} karena sudah pernah dieksekusi. Perbaikan dibuat sebagai migration baru.
+            </Alert>
+          )}
+          <RecipeEditor value={recipe} readOnly={!isDraft || !canEdit} onChange={setRecipe} />
 
           {migration.status === 'failed' && migration.errorMessage && (
             <div className="rounded-lg bg-neg-bg px-4 py-3 text-sm text-neg-ink">
@@ -206,16 +225,16 @@ function ExistingMigration({ id }: { id: string }) {
             <div className="flex flex-wrap items-center gap-2">
               {isDraft && (
                 <>
-                  <button className={ui.button} disabled={busy || !dirty || !sql.trim()} onClick={save}>
+                  <button className={ui.button} disabled={busy || !dirty || !recipeComplete(recipe)} onClick={save}>
                     <SaveIcon /> Simpan
                   </button>
                   <button
                     className={ui.buttonPrimary}
                     disabled={busy || dirty}
-                    onClick={execute}
+                    onClick={() => submit('run', 'Ajukan migration ini untuk dijalankan pada database target?')}
                     title={dirty ? 'Simpan perubahan dulu' : undefined}
                   >
-                    <PlayIcon /> Jalankan
+                    <PlayIcon /> Ajukan run
                   </button>
                   {dirty && <span className={ui.small}>Ada perubahan yang belum disimpan.</span>}
                   <button className={`${ui.buttonDanger} ml-auto`} disabled={busy} onClick={remove}>
@@ -223,7 +242,20 @@ function ExistingMigration({ id }: { id: string }) {
                   </button>
                 </>
               )}
-              {(migration.status === 'failed' || migration.status === 'success') && (
+              {canRollback && (
+                <button className={ui.buttonDanger} disabled={busy} onClick={() => submit('rollback', `Ajukan rollback v${migration.version} memakai SQL down-nya?`)}>
+                  <ArrowLeftIcon /> Rollback
+                </button>
+              )}
+              {canForward && (
+                <button className={ui.button} disabled={busy} onClick={() => submit('forward', `Ajukan forward v${migration.version} (jalankan ulang SQL up)?`)}>
+                  <RefreshIcon /> Forward
+                </button>
+              )}
+              {migration.irreversible && isTop && (
+                <span className={ui.small}>Irreversible: {migration.irreversibleReason}. Tidak bisa di-rollback.</span>
+              )}
+              {(migration.status !== 'draft' || migration.frozenAt) && (
                 <button className={ui.button} disabled={busy} onClick={duplicate}>
                   <CopyIcon /> Duplikat jadi draft baru
                 </button>

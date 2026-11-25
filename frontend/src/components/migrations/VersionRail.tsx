@@ -1,24 +1,29 @@
 import { Link } from 'react-router'
-import type { Migration } from '../../api/migrations'
+import { type Migration, migrationState } from '../../api/migrations'
 
 const MAX_STEPS = 16
 
 const dot = (m: Migration, current: number) => {
-  if (m.status === 'failed') return 'size-2.5 border-2 border-negative bg-sheet'
-  if (m.status === 'running') return 'size-2.5 border-2 border-warning bg-sheet'
-  if (m.version === current) return 'size-3 bg-accent'
-  return 'size-2.5 bg-[#8d9398]'
+  const s = migrationState(m)
+  if (s === 'failed') return 'size-2.5 border-2 border-negative bg-sheet'
+  if (s === 'running') return 'size-2.5 border-2 border-warning bg-sheet'
+  if (s === 'active') return m.version === current ? 'size-3 bg-accent' : 'size-2.5 bg-[#8d9398]'
+  return 'size-2.5 border-2 border-[#8d9398] bg-sheet'
 }
 
-const describe = (m: Migration, current: number) =>
-  m.status === 'failed' ? 'gagal' : m.status === 'running' ? 'berjalan' : m.version === current ? 'versi saat ini' : 'sukses'
+const describe = (m: Migration, current: number) => {
+  const s = migrationState(m)
+  if (s === 'active') return m.version === current ? 'versi saat ini' : 'aktif'
+  return s === 'failed' ? 'gagal' : s === 'running' ? 'berjalan' : 'tidak aktif'
+}
 
-// The schema's history as one line of executed versions; the current version is the one mark in the data hue.
+// The schema's history as one line of executed versions; the current version is the one mark in the data hue,
+// and versions that are not applied (rolled back or failed) are hollow.
 export default function VersionRail({ migrations, currentVersion }: { migrations: Migration[]; currentVersion: number }) {
   const executed = migrations.filter((m) => m.version !== null).sort((a, b) => (a.version ?? 0) - (b.version ?? 0))
   const shown = executed.slice(-MAX_STEPS)
   const hidden = executed.length - shown.length
-  const drafts = migrations.filter((m) => m.status === 'draft').length
+  const drafts = migrations.filter((m) => migrationState(m) === 'draft').length
 
   if (executed.length === 0) {
     return <p className="text-sm text-muted">Belum ada migration yang dijalankan{drafts > 0 && `, ${drafts} draft menunggu`}.</p>
