@@ -257,10 +257,9 @@ func (s *Service) requireDatabase(ctx context.Context, databaseID uint) error {
 
 // snapshot is a database's derived position as the views need it.
 type snapshot struct {
-	state   position.State
-	current int
-	next    uint
-	hasNext bool
+	state    position.State
+	versions map[uint]int
+	current  int
 }
 
 func (s *Service) position(ctx context.Context, databaseID uint) (snapshot, error) {
@@ -268,8 +267,7 @@ func (s *Service) position(ctx context.Context, databaseID uint) (snapshot, erro
 	if err != nil {
 		return snapshot{}, err
 	}
-	next, ok := position.NextForward(st, versions)
-	return snapshot{state: st, current: position.ActiveVersion(st, versions), next: next, hasNext: ok}, nil
+	return snapshot{state: st, versions: versions, current: position.ActiveVersion(st, versions)}, nil
 }
 
 func (s *Service) user(ctx context.Context, userID uint) (*models.User, error) {

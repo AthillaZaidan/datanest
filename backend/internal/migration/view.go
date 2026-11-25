@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
+	"github.com/AthillaZaidan/datanest/backend/internal/position"
 )
 
 // View is the API shape of a migration.
@@ -54,7 +55,7 @@ func toView(m *models.Migration, p snapshot) View {
 		IrreversibleReason: m.IrreversibleReason,
 		FrozenAt:           m.FrozenAt,
 		Active:             p.state.IsActive(m.ID),
-		Forwardable:        p.hasNext && p.next == m.ID,
+		Forwardable:        p.state.Partial == nil && position.Forwardable(p.state, p.versions, m.ID),
 		Status:             m.Status,
 		ErrorMessage:       m.ErrorMessage,
 		ErrorCode:          m.ErrorCode,
