@@ -6,7 +6,9 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/approval"
 	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
 	"github.com/AthillaZaidan/datanest/backend/internal/execution"
-	"log"
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
+	"github.com/AthillaZaidan/datanest/backend/internal/reqctx"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -87,7 +89,7 @@ func NewRouter(d Deps) *gin.Engine {
 	}
 	r := gin.New()
 	r.Use(gin.Recovery())
-	r.Use(RequestLogger(log.Default()))
+	r.Use(RequestLogger())
 	if d.Security != nil {
 		r.Use(d.Security)
 	}
@@ -163,6 +165,13 @@ func NewRouter(d Deps) *gin.Engine {
 // RespondError writes err in the standard error format and aborts the request.
 func RespondError(c *gin.Context, err error) {
 	status, body := apperr.Response(err)
+	if body.Error.Code == apperr.ErrForbidden.Code || body.Error.Code == apperr.ErrNotAnApprover.Code {
+		attrs := []any{obs.AttrMethod, c.Request.Method, obs.AttrPath, c.Request.URL.Path, "code", body.Error.Code}
+		if userID, ok := reqctx.UserID(c); ok {
+			attrs = append(attrs, obs.AttrActorID, userID)
+		}
+		slog.WarnContext(c.Request.Context(), obs.EventAuthzDenied, attrs...)
+	}
 	c.AbortWithStatusJSON(status, body)
 }
 

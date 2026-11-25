@@ -1,24 +1,34 @@
 package httpapi
 
 import (
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 	"github.com/AthillaZaidan/datanest/backend/internal/reqctx"
 )
 
-// RequestLogger records only routing metadata. It never records headers or
-// bodies, which can contain passwords, session IDs, and CSRF tokens.
-func RequestLogger(logger *log.Logger) gin.HandlerFunc {
+const RequestIDHeader = "X-Request-ID"
+
+func RequestLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// The ID is made by the server, never taken from the client.
+		id := obs.NewCorrelationID()
+		c.Header(RequestIDHeader, id)
+		c.Request = c.Request.WithContext(obs.WithCorrelationID(c.Request.Context(), id))
+
 		started := time.Now()
 		c.Next()
-		if userID, ok := reqctx.UserID(c); ok {
-			logger.Printf("method=%s path=%s status=%d duration=%s user_id=%d", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), time.Since(started), userID)
-			return
+
+		attrs := []any{
+			obs.AttrMethod, c.Request.Method, obs.AttrPath, c.Request.URL.Path,
+			obs.AttrStatus, c.Writer.Status(), obs.AttrDurationMS, time.Since(started).Milliseconds(),
 		}
-		logger.Printf("method=%s path=%s status=%d duration=%s", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), time.Since(started))
+		if userID, ok := reqctx.UserID(c); ok {
+			attrs = append(attrs, obs.AttrActorID, userID)
+		}
+		slog.InfoContext(c.Request.Context(), obs.EventHTTPRequest, attrs...)
 	}
 }
