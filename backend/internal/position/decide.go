@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
+	"github.com/AthillaZaidan/datanest/backend/internal/migration/sqlguard"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
 )
 
@@ -115,7 +116,8 @@ func unknownKind() error {
 	return apperr.ErrValidation.WithDetails(map[string]string{"kind": "harus run, forward, atau rollback"})
 }
 
-// complete checks that a recipe may be run: up SQL, plus down SQL or a reason it is irreversible.
+// complete checks that a recipe may be run: up SQL, plus down SQL or a reason it is
+// irreversible, and the per-batch contract of a batch recipe.
 func complete(m *models.Migration) error {
 	details := map[string]string{}
 	if strings.TrimSpace(m.SQL) == "" {
@@ -127,10 +129,25 @@ func complete(m *models.Migration) error {
 	if !m.Irreversible && strings.TrimSpace(m.SQLDown) == "" {
 		details["sqlDown"] = "wajib diisi, atau tandai migration irreversible beserta alasannya"
 	}
+	if m.Mode == models.ExecModeBatch {
+		batchContract(details, "sqlUp", m.SQL)
+		if !m.Irreversible {
+			batchContract(details, "sqlDown", m.SQLDown)
+		}
+	}
 	if len(details) > 0 {
 		return apperr.ErrValidation.WithMessage("Migration belum lengkap.").WithDetails(details)
 	}
 	return nil
+}
+
+func batchContract(details map[string]string, field, sql string) {
+	if details[field] != "" {
+		return
+	}
+	if problem := sqlguard.BatchProblem(sql); problem != "" {
+		details[field] = problem
+	}
 }
 
 func Forwardable(st State, versions map[uint]int, migrationID uint) bool {
