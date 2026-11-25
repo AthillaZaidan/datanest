@@ -44,6 +44,12 @@ export const UsersIcon = icon(
     <path d="M16 4.5a3.5 3.5 0 0 1 0 7M18.5 20a6.5 6.5 0 0 0-3-5.5" />
   </>,
 )
+export const InboxIcon = icon(
+  <>
+    <path d="M3 13l2.5-8h13L21 13" />
+    <path d="M3 13v6a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-6h-5.5a3.5 3.5 0 0 1-7 0H3z" />
+  </>,
+)
 export const ServerIcon = icon(
   <>
     <rect x="3" y="4" width="18" height="7" rx="2" />
