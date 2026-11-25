@@ -45,6 +45,7 @@ type Config struct {
 	MaxAttempts      int
 	RetryDelays      []time.Duration
 	LockBusyDelay    time.Duration
+	HoldDelay        time.Duration
 	UncertainRetry   time.Duration
 	RepublishAfter   time.Duration
 	LockTimeout      time.Duration
@@ -76,6 +77,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.LockBusyDelay <= 0 {
 		c.LockBusyDelay = 5 * time.Second
+	}
+	if c.HoldDelay <= 0 {
+		c.HoldDelay = 10 * time.Second
 	}
 	if c.UncertainRetry <= 0 {
 		c.UncertainRetry = 30 * time.Second
