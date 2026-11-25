@@ -21,6 +21,9 @@ type Config struct {
 
 	AMQPURL string
 
+	LogLevel      string
+	TraceExporter string
+
 	// Seed the first Platform Admin when none exists.
 	AdminUsername string
 	AdminPassword string
@@ -73,6 +76,8 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 		FrontendDir:   r.str("FRONTEND_DIR", "../frontend/dist"),
 		PlatformDSN:   r.str("PLATFORM_DSN", ""),
 		AMQPURL:       r.str("AMQP_URL", ""),
+		LogLevel:      r.str("LOG_LEVEL", "info"),
+		TraceExporter: r.str("TRACE_EXPORTER", "console"),
 		AdminUsername: r.str("ADMIN_USERNAME", ""),
 		AdminPassword: r.str("ADMIN_PASSWORD", ""),
 		Session: SessionConfig{
@@ -101,6 +106,16 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 
 	if cfg.PlatformDSN == "" {
 		r.fail("PLATFORM_DSN is required")
+	}
+	switch cfg.LogLevel {
+	case "debug", "info", "warn", "error":
+	default:
+		r.fail("LOG_LEVEL must be debug, info, warn or error, got %q", cfg.LogLevel)
+	}
+	switch cfg.TraceExporter {
+	case "console", "none":
+	default:
+		r.fail("TRACE_EXPORTER must be console or none, got %q", cfg.TraceExporter)
 	}
 	s := cfg.Session
 	if !(s.GracePeriod < s.RotationInterval && s.RotationInterval < s.IdleTimeout && s.IdleTimeout < s.AbsoluteTimeout) {
