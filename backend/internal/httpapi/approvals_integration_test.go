@@ -256,3 +256,33 @@ func TestReviewEventsCarryTheMigrationVersionAndRevision(t *testing.T) {
 		}
 	}
 }
+
+func TestANonAdminRefusedByRequireAdminIsLoggedAsDenied(t *testing.T) {
+	lines := captureLogs(t)
+	e := newApprovalEnv(t)
+
+	r := call(e.as(e.dev), "GET", "/api/admin/users", nil)
+	if r.Code != 403 {
+		t.Fatalf("non-admin GET = %d, want 403", r.Code)
+	}
+	line := firstEvent(lines(), obs.EventAuthzDenied)
+	if line == nil {
+		t.Fatal("no authz.denied line")
+	}
+	if line[obs.AttrActorID] != float64(e.dev.ID) || line[obs.AttrMethod] != "GET" || line[obs.AttrPath] != "/api/admin/users" || line["code"] != "FORBIDDEN" {
+		t.Errorf("authz.denied = %v", line)
+	}
+	if line[obs.AttrCorrelationID] == nil {
+		t.Error("authz.denied has no correlation_id")
+	}
+
+	before := len(lines())
+	if r := call(e.as(e.admin), "GET", "/api/admin/users", nil); r.Code != 200 {
+		t.Fatalf("admin GET = %d", r.Code)
+	}
+	for _, l := range lines()[before:] {
+		if l[obs.AttrEvent] == obs.EventAuthzDenied {
+			t.Errorf("an admin request logged %v", l)
+		}
+	}
+}
