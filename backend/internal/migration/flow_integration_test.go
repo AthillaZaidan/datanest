@@ -88,6 +88,23 @@ func (f *flow) do(migrationID uint, kind models.ExecutionKind) models.MigrationE
 	return out
 }
 
+func (f *flow) run(e models.MigrationExecution) models.MigrationExecution {
+	f.t.Helper()
+	if err := f.platform.Model(&e).Update("status", models.ExecQueued).Error; err != nil {
+		f.t.Fatal(err)
+	}
+	claimed, result, err := f.w.Claim(f.ctx, e.ID)
+	if err != nil || result != worker.ClaimOK {
+		f.t.Fatalf("claim = %v, %v", result, err)
+	}
+	if err := f.w.Run(f.ctx, claimed); err != nil {
+		f.t.Fatalf("run: %v", err)
+	}
+	var out models.MigrationExecution
+	f.platform.First(&out, e.ID)
+	return out
+}
+
 func (f *flow) current() int {
 	f.t.Helper()
 	v, err := position.Current(f.ctx, f.platform, f.dbID)
@@ -189,6 +206,53 @@ func TestViewShowsActiveAndForwardable(t *testing.T) {
 	f.do(a, models.ExecKindForward)
 	check("after forward", a, true, false)
 	check("after forward", b, false, true)
+}
+
+func TestPositionFollowsRunOrderNotRequestOrder(t *testing.T) {
+	f := setupFlow(t)
+	a := f.recipe("CREATE TABLE a (id int)", "DROP TABLE a")
+	b := f.recipe("CREATE TABLE b (id int)", "DROP TABLE b")
+	requestA, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestB, err := f.svc.Submit(f.ctx, f.editor.ID, b, models.ExecKindRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runB := f.run(*requestB)
+	runA := f.run(*requestA)
+	if runA.Status != models.ExecSuccess || runB.Status != models.ExecSuccess {
+		t.Fatalf("runs = %s, %s", runA.Status, runB.Status)
+	}
+
+	version := func(id uint) int {
+		var m models.Migration
+		f.platform.First(&m, id)
+		if m.Version == nil {
+			t.Fatalf("migration %d has no version", id)
+		}
+		return *m.Version
+	}
+	if version(b) != 1 || version(a) != 2 || f.current() != 2 {
+		t.Fatalf("versions b=%d a=%d current=%d, want 1 2 2", version(b), version(a), f.current())
+	}
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, b, models.ExecKindRollback); errCode(err) != "ROLLBACK_NOT_ALLOWED" {
+		t.Errorf("rollback of the migration that ran first = %v", err)
+	}
+
+	history, err := f.svc.History(f.ctx, f.viewer.ID, f.dbID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 || history[0].MigrationID != b || history[1].MigrationID != a {
+		t.Errorf("history = %+v, want b before a", history)
+	}
+
+	if _, err := f.svc.Submit(f.ctx, f.editor.ID, a, models.ExecKindRollback); err != nil {
+		t.Errorf("rollback of the migration that ran last = %v", err)
+	}
 }
 
 func TestFailedRunCanBeForwardedUntilANewRunDiscardsIt(t *testing.T) {
