@@ -27,7 +27,7 @@ func (w *Worker) Run(ctx context.Context, cl *Claimed) error {
 		cl.span.SetStatus(codes.Error, err.Error())
 	}
 
-	lost := errors.Is(context.Cause(runCtx), errLockLost)
+	lost := errors.Is(context.Cause(runCtx), errLockLost) || errors.Is(err, errLockLost)
 	cancel(nil)
 	<-heartbeat
 
@@ -57,46 +57,52 @@ func (w *Worker) execute(ctx context.Context, cl *Claimed) (batches int, rows in
 		sp.End()
 	}()
 	e := &cl.Exec
-	if cl.From == models.ExecUncertain {
-		w.logRecoveryCheck(ctx, e)
-	}
 	if err := w.store.StartAttempt(context.WithoutCancel(ctx), e, cl.Owner); err != nil {
-		return 0, 0, err
-	}
-	if err := w.revalidate(ctx, e); err != nil {
-		return 0, 0, err
+		return e.CommittedBatches, e.CommittedRows, err
 	}
 	db, err := w.targets.Get(ctx, e.DatabaseID)
 	if err != nil {
-		return 0, 0, fmt.Errorf("target: %w", err)
+		w.logRecoveryCheck(ctx, cl, "unreachable", 0, err)
+		return e.CommittedBatches, e.CommittedRows, fmt.Errorf("target: %w", err)
+	}
+	own, err := migration.LookupExecution(ctx, db, e.ID)
+	if err != nil {
+		w.logRecoveryCheck(ctx, cl, "unreadable", 0, err)
+		return e.CommittedBatches, e.CommittedRows, err
+	}
+	if len(own) > 0 {
+		w.logRecoveryCheck(ctx, cl, "evidence", len(own), nil)
+	} else {
+		w.logRecoveryCheck(ctx, cl, "no_evidence", 0, nil)
+	}
+	if e.Mode != models.ExecModeBatch && len(own) > 0 {
+		return 1, own[0].RowCount, nil
+	}
+	batches, rows = totals(own)
+	if err := w.revalidate(ctx, e); err != nil {
+		return batches, rows, w.settleVerdict(ctx, db, cl, batches, err)
 	}
 	switch {
 	case e.Mode == models.ExecModeBatch && e.Kind == models.ExecKindRollback:
-		return w.runUndo(ctx, db, cl)
+		batches, rows, err = w.runUndo(ctx, db, cl, own)
 	case e.Mode == models.ExecModeBatch:
-		return w.runBatches(ctx, db, cl)
+		batches, rows, err = w.runBatches(ctx, db, cl, own)
 	default:
-		return w.runNormal(ctx, db, e)
+		batches, rows, err = w.runNormal(ctx, db, cl)
 	}
+	return batches, rows, w.settleVerdict(ctx, db, cl, batches, err)
 }
 
-func (w *Worker) logRecoveryCheck(ctx context.Context, e *models.MigrationExecution) {
-	attrs := jobAttrs(e)
-	db, err := w.targets.Get(ctx, e.DatabaseID)
-	if err != nil {
-		slog.WarnContext(ctx, obs.EventRecoveryCheck, append(attrs, "result", "unreachable", obs.AttrError, err.Error())...)
+func (w *Worker) logRecoveryCheck(ctx context.Context, cl *Claimed, result string, entries int, err error) {
+	if cl.From != models.ExecUncertain {
 		return
 	}
-	entries, err := migration.LookupExecution(ctx, db, e.ID)
+	attrs := logAttrs(&cl.Exec, "result", result, "ledger_entries", entries)
 	if err != nil {
-		slog.WarnContext(ctx, obs.EventRecoveryCheck, append(attrs, "result", "unreadable", obs.AttrError, err.Error())...)
+		slog.WarnContext(ctx, obs.EventRecoveryCheck, append(attrs, obs.AttrError, err.Error())...)
 		return
 	}
-	result := "no_evidence"
-	if len(entries) > 0 {
-		result = "evidence"
-	}
-	slog.InfoContext(ctx, obs.EventRecoveryCheck, append(attrs, "result", result, "ledger_entries", len(entries))...)
+	slog.InfoContext(ctx, obs.EventRecoveryCheck, attrs...)
 }
 
 func (w *Worker) revalidate(ctx context.Context, e *models.MigrationExecution) error {
