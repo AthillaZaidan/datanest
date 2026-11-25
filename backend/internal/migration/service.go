@@ -191,10 +191,10 @@ func (s *Service) createDraft(ctx context.Context, userID, databaseID uint, r Re
 		SQLDown:            r.SQLDown,
 		Irreversible:       r.Irreversible,
 		IrreversibleReason: r.IrreversibleReason,
-		Status:            models.MigrationDraft,
-		Revision:          1,
-		CreatedByID:       &u.ID,
-		CreatedByUsername: u.Username,
+		Status:             models.MigrationDraft,
+		Revision:           1,
+		CreatedByID:        &u.ID,
+		CreatedByUsername:  u.Username,
 	}
 	if current > 0 {
 		m.BaseVersion = &current

@@ -8,20 +8,20 @@ import (
 
 // View is the API shape of a migration.
 type View struct {
-	ID           uint                   `json:"id"`
-	DatabaseID   uint                   `json:"databaseId"`
-	Version      *int                   `json:"version"`
+	ID         uint `json:"id"`
+	DatabaseID uint `json:"databaseId"`
+	Version    *int `json:"version"`
 	// SQL is SQLUp under its Milestone 1 name, kept for older clients.
-	SQL                string     `json:"sql"`
-	SQLUp              string     `json:"sqlUp"`
-	SQLDown            string     `json:"sqlDown"`
-	Irreversible       bool       `json:"irreversible"`
-	IrreversibleReason string     `json:"irreversibleReason,omitempty"`
-	FrozenAt           *time.Time `json:"frozenAt"`
-	Status       models.MigrationStatus `json:"status"`
-	ErrorMessage string                 `json:"errorMessage,omitempty"`
-	ErrorCode    string                 `json:"errorCode,omitempty"`
-	BaseVersion  *int                   `json:"baseVersion"`
+	SQL                string                 `json:"sql"`
+	SQLUp              string                 `json:"sqlUp"`
+	SQLDown            string                 `json:"sqlDown"`
+	Irreversible       bool                   `json:"irreversible"`
+	IrreversibleReason string                 `json:"irreversibleReason,omitempty"`
+	FrozenAt           *time.Time             `json:"frozenAt"`
+	Status             models.MigrationStatus `json:"status"`
+	ErrorMessage       string                 `json:"errorMessage,omitempty"`
+	ErrorCode          string                 `json:"errorCode,omitempty"`
+	BaseVersion        *int                   `json:"baseVersion"`
 	// BaseOutdated warns that the database moved on since this draft was written.
 	BaseOutdated bool       `json:"baseOutdated"`
 	Revision     int        `json:"revision"`
@@ -40,28 +40,28 @@ func toView(m *models.Migration, currentVersion int) View {
 		base = *m.BaseVersion
 	}
 	return View{
-		ID:           m.ID,
-		DatabaseID:   m.DatabaseID,
-		Version:      m.Version,
+		ID:                 m.ID,
+		DatabaseID:         m.DatabaseID,
+		Version:            m.Version,
 		SQL:                m.SQL,
 		SQLUp:              m.SQL,
 		SQLDown:            m.SQLDown,
 		Irreversible:       m.Irreversible,
 		IrreversibleReason: m.IrreversibleReason,
 		FrozenAt:           m.FrozenAt,
-		Status:       m.Status,
-		ErrorMessage: m.ErrorMessage,
-		ErrorCode:    m.ErrorCode,
-		BaseVersion:  m.BaseVersion,
-		BaseOutdated: m.Status == models.MigrationDraft && currentVersion > base,
-		Revision:     m.Revision,
-		CreatedBy:    userLabel(m.CreatedByID, m.CreatedByUsername),
-		UpdatedBy:    userLabel(m.UpdatedByID, m.UpdatedByUsername),
-		ExecutedBy:   userLabel(m.ExecutedByID, m.ExecutedByUsername),
-		CreatedAt:    m.CreatedAt,
-		UpdatedAt:    m.UpdatedAt,
-		StartedAt:    m.StartedAt,
-		FinishedAt:   m.FinishedAt,
+		Status:             m.Status,
+		ErrorMessage:       m.ErrorMessage,
+		ErrorCode:          m.ErrorCode,
+		BaseVersion:        m.BaseVersion,
+		BaseOutdated:       m.Status == models.MigrationDraft && currentVersion > base,
+		Revision:           m.Revision,
+		CreatedBy:          userLabel(m.CreatedByID, m.CreatedByUsername),
+		UpdatedBy:          userLabel(m.UpdatedByID, m.UpdatedByUsername),
+		ExecutedBy:         userLabel(m.ExecutedByID, m.ExecutedByUsername),
+		CreatedAt:          m.CreatedAt,
+		UpdatedAt:          m.UpdatedAt,
+		StartedAt:          m.StartedAt,
+		FinishedAt:         m.FinishedAt,
 	}
 }
 
