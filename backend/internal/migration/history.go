@@ -46,7 +46,7 @@ func (s *Service) History(ctx context.Context, userID, databaseID uint, hideRoll
 	err := s.platform.WithContext(ctx).Table("migration_executions e").
 		Select("e.*, m.version").Joins("JOIN migrations m ON m.id = e.migration_id").
 		Where("e.database_id = ? AND e.status IN ?", databaseID, historyStatuses).
-		Order("e.id").Scan(&rows).Error
+		Order("e.run_seq NULLS LAST, e.id").Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
