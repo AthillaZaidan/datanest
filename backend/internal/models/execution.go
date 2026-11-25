@@ -36,8 +36,9 @@ type MigrationExecution struct {
 	ID          uint               `gorm:"primaryKey"`
 	MigrationID uint               `gorm:"not null;index"`
 	Migration   Migration          `gorm:"foreignKey:MigrationID;constraint:OnDelete:CASCADE"`
-	DatabaseID  uint               `gorm:"not null;index"`
+	DatabaseID  uint               `gorm:"not null;index;uniqueIndex:idx_executions_run_seq,priority:1"`
 	Database    DatabaseConnection `gorm:"foreignKey:DatabaseID;constraint:OnDelete:CASCADE"`
+	RunSeq      *int64             `gorm:"uniqueIndex:idx_executions_run_seq,priority:2"`
 
 	Kind   ExecutionKind   `gorm:"size:16;not null;check:chk_executions_kind,kind IN ('run', 'forward', 'rollback')"`
 	Status ExecutionStatus `gorm:"size:16;not null;index;check:chk_executions_status,status IN ('pending_review', 'approved', 'queued', 'running', 'success', 'failed', 'partial', 'uncertain', 'rejected', 'canceled')"`
