@@ -45,14 +45,22 @@ func Migrate(db *gorm.DB) error {
 // M1Reason marks migrations created before down SQL existed.
 const M1Reason = "Dibuat di Milestone 1, sebelum ada SQL down."
 
+const M1InterruptedReason = "Eksekusi terputus sebelum Milestone 2."
+
 // backfillM1History turns each executed Milestone 1 migration into a frozen,
 // irreversible recipe plus one run execution, in version order, so the active position
 // can be derived from executions. Rows that already have an execution are skipped, so
-// it is safe to run on every start. Migrations still running are left to Reconcile,
-// which checks the target ledger before settling them.
+// it is safe to run on every start. Migrations still running were interrupted by the
+// retired Milestone 1 path, which can no longer settle them, so they are failed first
+// and recorded like the others; one without a version is failed and not recorded.
 func backfillM1History(db *gorm.DB) error {
 	return db.Transaction(func(tx *gorm.DB) error {
-		err := tx.Exec(`UPDATE migrations SET irreversible = true, irreversible_reason = ?,
+		err := tx.Exec(`UPDATE migrations SET status = 'failed', error_message = ?,
+			finished_at = COALESCE(finished_at, now()) WHERE status = 'running'`, M1InterruptedReason).Error
+		if err != nil {
+			return err
+		}
+		err = tx.Exec(`UPDATE migrations SET irreversible = true, irreversible_reason = ?,
 			frozen_at = COALESCE(frozen_at, started_at, updated_at)
 			WHERE sql_down = '' AND `+unrecordedRun, M1Reason).Error
 		if err != nil {
