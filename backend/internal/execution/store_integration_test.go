@@ -52,6 +52,63 @@ func TestClaimHasOneWinnerAndCountsTheAttempt(t *testing.T) {
 	}
 }
 
+func runSeqOf(t *testing.T, s *Store, id uint) int64 {
+	t.Helper()
+	e, err := s.Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.RunSeq == nil {
+		t.Fatalf("execution %d has no run_seq", id)
+	}
+	return *e.RunSeq
+}
+
+func TestClaimNumbersRunsPerDatabaseInClaimOrder(t *testing.T) {
+	s, db, conn := setup(t)
+	other := testutil.CreateDatabaseConnection(t, db, "gudang")
+	ctx := context.Background()
+	first := newExec(t, db, conn.ID, models.MigrationExecution{})
+	second := newExec(t, db, conn.ID, models.MigrationExecution{})
+	elsewhere := newExec(t, db, other.ID, models.MigrationExecution{})
+
+	if got, _ := s.Claim(ctx, second.ID, models.ExecQueued, "w"); got == nil || got.RunSeq == nil || *got.RunSeq != 1 {
+		t.Fatalf("first claim = %+v", got)
+	}
+	s.Claim(ctx, first.ID, models.ExecQueued, "w")
+	s.Claim(ctx, elsewhere.ID, models.ExecQueued, "w")
+
+	if got := runSeqOf(t, s, second.ID); got != 1 {
+		t.Errorf("run_seq of the first claimed = %d, want 1", got)
+	}
+	if got := runSeqOf(t, s, first.ID); got != 2 {
+		t.Errorf("run_seq of the second claimed = %d, want 2", got)
+	}
+	if got := runSeqOf(t, s, elsewhere.ID); got != 1 {
+		t.Errorf("run_seq on another database = %d, want 1", got)
+	}
+}
+
+func TestClaimOfARequeuedExecutionMovesItAfterTheOneThatRanBetween(t *testing.T) {
+	s, db, conn := setup(t)
+	ctx := context.Background()
+	retried := newExec(t, db, conn.ID, models.MigrationExecution{})
+	between := newExec(t, db, conn.ID, models.MigrationExecution{})
+
+	s.Claim(ctx, retried.ID, models.ExecQueued, "w")
+	if ok, err := s.Requeue(ctx, retried.ID, "w", 0, "", ""); err != nil || !ok {
+		t.Fatalf("requeue = %v, %v", ok, err)
+	}
+	s.Claim(ctx, between.ID, models.ExecQueued, "w")
+	if got, _ := s.Claim(ctx, retried.ID, models.ExecQueued, "w"); got == nil {
+		t.Fatal("reclaim failed")
+	}
+
+	if before, after := runSeqOf(t, s, between.ID), runSeqOf(t, s, retried.ID); after <= before {
+		t.Errorf("retried run_seq %d is not after the one that ran in between (%d)", after, before)
+	}
+}
+
 func TestClaimRespectsNotBefore(t *testing.T) {
 	s, db, conn := setup(t)
 	e := newExec(t, db, conn.ID, models.MigrationExecution{})
