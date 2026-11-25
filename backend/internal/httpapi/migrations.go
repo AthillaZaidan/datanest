@@ -133,10 +133,6 @@ func (h migrationHandlers) delete(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-func (h migrationHandlers) execute(c *gin.Context) {
-	h.withMigration(c, http.StatusOK, h.svc.Execute)
-}
-
 // explain plans the saved SQL in a rolled-back transaction. ?analyze=true also runs it, which needs EDIT.
 func (h migrationHandlers) explain(c *gin.Context) {
 	userID, ok := currentUser(c)
