@@ -15,6 +15,9 @@ type Recipe struct {
 	SQLDown            string
 	Irreversible       bool
 	IrreversibleReason string
+	Mode               models.ExecutionMode
+	BatchTable         string
+	BatchColumn        string
 }
 
 // validate checks what a draft must always satisfy. A reversible draft may still lack
@@ -32,6 +35,20 @@ func (r *Recipe) validate() error {
 	} else {
 		r.IrreversibleReason = ""
 	}
+	switch r.Mode {
+	case "", models.ExecModeNormal:
+		r.Mode, r.BatchTable, r.BatchColumn = models.ExecModeNormal, "", ""
+	case models.ExecModeBatch:
+		r.BatchTable, r.BatchColumn = strings.TrimSpace(r.BatchTable), strings.TrimSpace(r.BatchColumn)
+		if r.BatchTable == "" {
+			details["batchTable"] = "wajib diisi untuk mode per-batch"
+		}
+		if r.BatchColumn == "" {
+			details["batchColumn"] = "wajib diisi untuk mode per-batch"
+		}
+	default:
+		details["mode"] = "harus normal atau batch"
+	}
 	if len(details) > 0 {
 		return apperr.ErrValidation.WithMessage("Migration tidak valid.").WithDetails(details)
 	}
@@ -47,4 +64,9 @@ var openStatuses = []models.ExecutionStatus{models.ExecPendingReview, models.Exe
 
 func openExecutions(db *gorm.DB, migrationID uint) *gorm.DB {
 	return db.Model(&models.MigrationExecution{}).Where("migration_id = ? AND status IN ?", migrationID, openStatuses)
+}
+
+func recipeOf(m *models.Migration) Recipe {
+	return Recipe{SQLUp: m.SQL, SQLDown: m.SQLDown, Irreversible: m.Irreversible, IrreversibleReason: m.IrreversibleReason,
+		Mode: m.Mode, BatchTable: m.BatchTable, BatchColumn: m.BatchColumn}
 }
