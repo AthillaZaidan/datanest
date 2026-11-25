@@ -22,7 +22,8 @@ var (
 // its SQL (design D2/D4). It is meant for worker.Worker.Revalidate; an error fails the
 // execution with the reason.
 func (s *Service) Revalidate(ctx context.Context, e *models.MigrationExecution) error {
-	return s.platform.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	var version *int
+	err := s.platform.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var m models.Migration
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&m, e.MigrationID).Error; err != nil {
 			return err
@@ -45,15 +46,28 @@ func (s *Service) Revalidate(ctx context.Context, e *models.MigrationExecution) 
 		if !sameID(plan.Reverts, e.RevertsExecutionID) || !sameID(plan.Continues, e.ContinuesExecutionID) {
 			return errReferenceChanged
 		}
-		if m.Version == nil {
-			err := tx.Exec(`UPDATE migrations SET version = (SELECT COALESCE(MAX(version), 0) + 1 FROM migrations WHERE database_id = ?)
-				WHERE id = ? AND version IS NULL`, m.DatabaseID, m.ID).Error
+		version = m.Version
+		if version == nil {
+			var assigned int
+			err := tx.Raw(`UPDATE migrations SET version = (SELECT COALESCE(MAX(version), 0) + 1 FROM migrations WHERE database_id = ?)
+				WHERE id = ? AND version IS NULL RETURNING version`, m.DatabaseID, m.ID).Scan(&assigned).Error
 			if err != nil {
+				return err
+			}
+			version = &assigned
+		}
+		if e.Version == nil || *e.Version != *version {
+			if err := tx.Model(&models.MigrationExecution{}).Where("id = ?", e.ID).Update("version", *version).Error; err != nil {
 				return err
 			}
 		}
 		return tx.Exec(`UPDATE migrations SET frozen_at = now() WHERE id = ? AND frozen_at IS NULL`, m.ID).Error
 	})
+	if err != nil {
+		return err
+	}
+	e.Version = version
+	return nil
 }
 
 func sameID(a, b *uint) bool {
