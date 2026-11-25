@@ -12,20 +12,20 @@ type View struct {
 	DatabaseID uint `json:"databaseId"`
 	Version    *int `json:"version"`
 	// SQL is SQLUp under its Milestone 1 name, kept for older clients.
-	SQL                string                 `json:"sql"`
-	SQLUp              string                 `json:"sqlUp"`
-	SQLDown            string                 `json:"sqlDown"`
-	Irreversible       bool                   `json:"irreversible"`
-	IrreversibleReason string                 `json:"irreversibleReason,omitempty"`
-	FrozenAt           *time.Time             `json:"frozenAt"`
+	SQL                string     `json:"sql"`
+	SQLUp              string     `json:"sqlUp"`
+	SQLDown            string     `json:"sqlDown"`
+	Irreversible       bool       `json:"irreversible"`
+	IrreversibleReason string     `json:"irreversibleReason,omitempty"`
+	FrozenAt           *time.Time `json:"frozenAt"`
 	// Active and Forwardable come from the derived position (package position), the same
 	// source as the version rules, so the SPA never infers them from status or MAX(version).
-	Active      bool `json:"active"`
-	Forwardable bool `json:"forwardable"`
-	Status             models.MigrationStatus `json:"status"`
-	ErrorMessage       string                 `json:"errorMessage,omitempty"`
-	ErrorCode          string                 `json:"errorCode,omitempty"`
-	BaseVersion        *int                   `json:"baseVersion"`
+	Active       bool                   `json:"active"`
+	Forwardable  bool                   `json:"forwardable"`
+	Status       models.MigrationStatus `json:"status"`
+	ErrorMessage string                 `json:"errorMessage,omitempty"`
+	ErrorCode    string                 `json:"errorCode,omitempty"`
+	BaseVersion  *int                   `json:"baseVersion"`
 	// BaseOutdated warns that the database moved on since this draft was written.
 	BaseOutdated bool       `json:"baseOutdated"`
 	Revision     int        `json:"revision"`
