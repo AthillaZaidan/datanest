@@ -39,7 +39,9 @@ func (s *Store) Claim(ctx context.Context, id uint, from models.ExecutionStatus,
 	err := s.db.WithContext(ctx).Raw(`
 		UPDATE migration_executions SET
 			status = ?, worker_id = ?, attempts = attempts + 1, not_before = NULL,
-			started_at = COALESCE(started_at, now()), updated_at = now()
+			started_at = COALESCE(started_at, now()), updated_at = now(),
+			run_seq = (SELECT COALESCE(MAX(r.run_seq), 0) + 1 FROM migration_executions r
+				WHERE r.database_id = migration_executions.database_id)
 		WHERE id = ? AND status = ? AND (not_before IS NULL OR not_before <= now())
 		RETURNING *`,
 		models.ExecRunning, owner, id, from,
