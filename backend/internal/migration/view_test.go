@@ -82,6 +82,10 @@ func TestRecipeValidate(t *testing.T) {
 		{"reversible draft may lack down for now", Recipe{SQLUp: "SELECT 1"}, nil},
 		{"irreversible needs a reason", Recipe{SQLUp: "SELECT 1", Irreversible: true}, []string{"irreversibleReason"}},
 		{"irreversible with a reason", Recipe{SQLUp: "SELECT 1", Irreversible: true, IrreversibleReason: "data hilang"}, nil},
+		{"unknown mode", Recipe{SQLUp: "SELECT 1", Mode: "bulk"}, []string{"mode"}},
+		{"batch without table and column", Recipe{SQLUp: "SELECT 1", Mode: models.ExecModeBatch, BatchTable: " ", BatchColumn: "\t"}, []string{"batchTable", "batchColumn"}},
+		{"batch without column", Recipe{SQLUp: "SELECT 1", Mode: models.ExecModeBatch, BatchTable: "orders"}, []string{"batchColumn"}},
+		{"batch", Recipe{SQLUp: "SELECT 1", Mode: models.ExecModeBatch, BatchTable: "orders", BatchColumn: "id"}, nil},
 	}
 	for _, tt := range tests {
 		err := tt.r.validate()
@@ -113,5 +117,16 @@ func TestRecipeValidateNormalisesTheDownSQL(t *testing.T) {
 	r = Recipe{SQLUp: "SELECT 1", SQLDown: "SELECT 2", IrreversibleReason: "stale"}
 	if err := r.validate(); err != nil || r.IrreversibleReason != "" {
 		t.Errorf("reversible keeps reason %q (%v)", r.IrreversibleReason, err)
+	}
+}
+
+func TestRecipeValidateNormalisesTheMode(t *testing.T) {
+	normal := Recipe{SQLUp: "SELECT 1", BatchTable: "orders", BatchColumn: "id"}
+	if err := normal.validate(); err != nil || normal.Mode != models.ExecModeNormal || normal.BatchTable != "" || normal.BatchColumn != "" {
+		t.Errorf("normal = %+v, %v", normal, err)
+	}
+	batch := Recipe{SQLUp: "SELECT 1", Mode: models.ExecModeBatch, BatchTable: " public.orders ", BatchColumn: " id\n"}
+	if err := batch.validate(); err != nil || batch.BatchTable != "public.orders" || batch.BatchColumn != "id" {
+		t.Errorf("batch = %+v, %v", batch, err)
 	}
 }
