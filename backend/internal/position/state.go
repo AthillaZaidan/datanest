@@ -93,6 +93,7 @@ func Derive(events []Event) State {
 			case models.ExecPartial:
 				st.discard()
 			case models.ExecFailed:
+				st.shelveRetry()
 				st.Retry = e.MigrationID
 			}
 		case models.ExecKindForward:
@@ -139,6 +140,10 @@ func (s *State) rollback(e Event) {
 		s.Partial = nil
 	}
 	s.Redo[e.MigrationID] = true
+	s.shelveRetry()
+}
+
+func (s *State) shelveRetry() {
 	if s.Retry != 0 {
 		s.Redo[s.Retry] = true
 		s.Retry = 0
