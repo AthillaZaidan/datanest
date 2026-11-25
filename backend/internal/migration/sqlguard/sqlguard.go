@@ -34,23 +34,12 @@ func Check(sql string) error {
 
 func tokens(sql string) []string {
 	var out []string
-	for i := 0; i < len(sql); {
-		if j := skip(sql, i); j != i {
-			i = j
-			continue
-		}
-		switch {
-		case sql[i] == ';':
+	for _, t := range lex(sql) {
+		switch t.kind {
+		case kindSemicolon:
 			out = append(out, ";")
-			i++
-		case isWord(sql[i]):
-			start := i
-			for i < len(sql) && (isWord(sql[i]) || sql[i] == '$') {
-				i++
-			}
-			out = append(out, strings.ToLower(sql[start:i]))
-		default:
-			i++
+		case kindWord, kindNumber:
+			out = append(out, strings.ToLower(sql[t.start:t.end]))
 		}
 	}
 	return out
@@ -73,111 +62,179 @@ func Split(sql string) []string {
 			out = append(out, piece)
 		}
 	}
-	for i := 0; i < len(sql); {
-		if j := skip(sql, i); j != i {
-			i = j
-			continue
+	for _, t := range lex(sql) {
+		if t.kind == kindSemicolon {
+			add(t.start)
+			start = t.end
 		}
-		if sql[i] == ';' {
-			add(i)
-			start = i + 1
-		}
-		i++
 	}
 	add(len(sql))
 	return out
 }
 
-// skip returns the index after a comment, quoted string, quoted identifier or dollar-quoted body starting at i,
-// or i itself when none starts there.
-func skip(sql string, i int) int {
+// MaskLiterals replaces string literals with '?' and drops comments.
+func MaskLiterals(sql string) string {
+	var b strings.Builder
+	for _, t := range lex(sql) {
+		switch t.kind {
+		case kindString, kindDollar:
+			b.WriteString("'?'")
+		case kindComment:
+			b.WriteByte(' ')
+		default:
+			b.WriteString(sql[t.start:t.end])
+		}
+	}
+	return b.String()
+}
+
+type kind int
+
+const (
+	kindOther kind = iota
+	kindSpace
+	kindSemicolon
+	kindWord
+	kindNumber
+	kindParam
+	kindString
+	kindQuotedIdent
+	kindDollar
+	kindComment
+)
+
+type token struct {
+	kind       kind
+	start, end int
+}
+
+func lex(sql string) []token {
+	var out []token
+	for i := 0; i < len(sql); {
+		kind, end := next(sql, i)
+		out = append(out, token{kind, i, end})
+		if kind == kindWord && isEscapePrefix(sql[i:end]) && end < len(sql) && sql[end] == '\'' {
+			stringEnd := escapeStringEnd(sql, end+1)
+			out = append(out, token{kindString, end, stringEnd})
+			end = stringEnd
+		}
+		i = end
+	}
+	return out
+}
+
+func next(sql string, i int) (kind, int) {
+	c := sql[i]
 	switch {
+	case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v':
+		return kindSpace, i + 1
+	case c == ';':
+		return kindSemicolon, i + 1
 	case strings.HasPrefix(sql[i:], "--"):
-		i += 2
-		for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
-			i++
-		}
+		return kindComment, lineCommentEnd(sql, i)
 	case strings.HasPrefix(sql[i:], "/*"):
-		i += 2
-		depth := 1
-		for i < len(sql) && depth > 0 {
-			if strings.HasPrefix(sql[i:], "/*") {
-				depth++
-				i += 2
-			} else if strings.HasPrefix(sql[i:], "*/") {
-				depth--
-				i += 2
-			} else {
-				i++
-			}
+		return kindComment, blockCommentEnd(sql, i)
+	case isTagStart(c):
+		j := i + 1
+		for j < len(sql) && (isWord(sql[j]) || sql[j] == '$') {
+			j++
 		}
-	case sql[i] == '\'' && endsEscapePrefix(sql, i):
-		i = escapeStringEnd(sql, i+1)
-	case sql[i] == '\'' || sql[i] == '"':
-		q := sql[i]
-		i++
-		for i < len(sql) {
-			if sql[i] == q {
-				i++
-				if i < len(sql) && sql[i] == q {
-					i++
-					continue
-				}
-				break
-			}
-			i++
+		return kindWord, j
+	case isDigit(c) || c == '.' && i+1 < len(sql) && isDigit(sql[i+1]):
+		return kindNumber, numberEnd(sql, i)
+	case c == '\'':
+		return kindString, quotedEnd(sql, i)
+	case c == '"':
+		return kindQuotedIdent, quotedEnd(sql, i)
+	case c == '$':
+		if j := digitsEnd(sql, i+1); j > i+1 {
+			return kindParam, j
 		}
-	case sql[i] == '$' && (i == 0 || !isWord(sql[i-1]) && sql[i-1] != '$'):
 		if end := dollarEnd(sql, i); end != "" {
-			i += len(end)
-			if close := strings.Index(sql[i:], end); close >= 0 {
-				i += close + len(end)
-			} else {
-				i = len(sql)
+			body := i + len(end)
+			if close := strings.Index(sql[body:], end); close >= 0 {
+				return kindDollar, body + close + len(end)
 			}
+			return kindDollar, len(sql)
+		}
+	}
+	return kindOther, i + 1
+}
+
+func lineCommentEnd(sql string, i int) int {
+	for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
+		i++
+	}
+	return i
+}
+
+func blockCommentEnd(sql string, i int) int {
+	i += 2
+	depth := 1
+	for i < len(sql) && depth > 0 {
+		if strings.HasPrefix(sql[i:], "/*") {
+			depth++
+			i += 2
+		} else if strings.HasPrefix(sql[i:], "*/") {
+			depth--
+			i += 2
+		} else {
+			i++
 		}
 	}
 	return i
 }
 
-// MaskLiterals replaces string literals with '?' and drops comments.
-func MaskLiterals(sql string) string {
-	var b strings.Builder
-	for i := 0; i < len(sql); {
-		j := skip(sql, i)
-		if j == i {
-			b.WriteByte(sql[i])
+func quotedEnd(sql string, i int) int {
+	q := sql[i]
+	i++
+	for i < len(sql) {
+		if sql[i] == q {
 			i++
-			continue
+			if i < len(sql) && sql[i] == q {
+				i++
+				continue
+			}
+			break
 		}
-		switch seg := sql[i:j]; {
-		case seg[0] == '\'' || seg[0] == '$':
-			b.WriteString("'?'")
-		case seg[0] == '-' || seg[0] == '/':
-			b.WriteByte(' ')
-		default:
-			b.WriteString(seg)
-		}
-		i = j
+		i++
 	}
-	return b.String()
+	return i
 }
 
-func isWord(b byte) bool {
-	return b == '_' || b >= 0x80 || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
+func digitsEnd(sql string, i int) int {
+	for i < len(sql) && isDigit(sql[i]) {
+		i++
+	}
+	return i
 }
+
+func numberEnd(sql string, i int) int {
+	i = digitsEnd(sql, i)
+	if i < len(sql) && sql[i] == '.' {
+		i = digitsEnd(sql, i+1)
+	}
+	if i < len(sql) && (sql[i] == 'e' || sql[i] == 'E') {
+		j := i + 1
+		if j < len(sql) && (sql[j] == '+' || sql[j] == '-') {
+			j++
+		}
+		if k := digitsEnd(sql, j); k > j {
+			i = k
+		}
+	}
+	return i
+}
+
+func isDigit(b byte) bool { return b >= '0' && b <= '9' }
+
+func isWord(b byte) bool { return isTagStart(b) || isDigit(b) }
 
 func isTagStart(b byte) bool {
 	return b == '_' || b >= 0x80 || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
 }
 
-func endsEscapePrefix(sql string, quote int) bool {
-	start := quote
-	for start > 0 && (isWord(sql[start-1]) || sql[start-1] == '$') {
-		start--
-	}
-	return quote-start == 1 && (sql[start] == 'e' || sql[start] == 'E')
-}
+func isEscapePrefix(word string) bool { return word == "e" || word == "E" }
 
 func escapeStringEnd(sql string, i int) int {
 	for i < len(sql) {
@@ -212,9 +269,7 @@ func continuation(sql string, i int) (int, bool) {
 		case sql[i] == ' ' || sql[i] == '\t' || sql[i] == '\f' || sql[i] == '\v':
 			i++
 		case strings.HasPrefix(sql[i:], "--"):
-			for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
-				i++
-			}
+			i = lineCommentEnd(sql, i)
 		case sql[i] == '\'':
 			return i + 1, sawNewline
 		default:

@@ -7,28 +7,21 @@ const (
 )
 
 func BatchProblem(sql string) string {
-	if len(Split(sql)) != 1 {
+	statements := 0
+	for _, piece := range Split(sql) {
+		if hasToken(piece) {
+			statements++
+		}
+	}
+	if statements != 1 {
 		return batchOneStatement
 	}
 	var lower, upper bool
-	for i := 0; i < len(sql); {
-		if j := skip(sql, i); j != i {
-			i = j
+	for _, t := range lex(sql) {
+		if t.kind != kindParam {
 			continue
 		}
-		if sql[i] != '$' || i > 0 && (isWord(sql[i-1]) || sql[i-1] == '$') {
-			i++
-			continue
-		}
-		j := i + 1
-		for j < len(sql) && sql[j] >= '0' && sql[j] <= '9' {
-			j++
-		}
-		if j == i+1 {
-			i++
-			continue
-		}
-		switch sql[i+1 : j] {
+		switch sql[t.start+1 : t.end] {
 		case "1":
 			lower = true
 		case "2":
@@ -36,10 +29,18 @@ func BatchProblem(sql string) string {
 		default:
 			return batchBadParameter
 		}
-		i = j
 	}
 	if !lower || !upper {
 		return batchMissing
 	}
 	return ""
+}
+
+func hasToken(sql string) bool {
+	for _, t := range lex(sql) {
+		if t.kind != kindSpace && t.kind != kindComment {
+			return true
+		}
+	}
+	return false
 }
