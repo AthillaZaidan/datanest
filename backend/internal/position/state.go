@@ -1,4 +1,6 @@
-package migration
+// Package position derives the active migration position of a database from its
+// executions (design D1/D2). It is the single source of truth for what is applied.
+package position
 
 import (
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
