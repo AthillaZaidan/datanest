@@ -65,6 +65,7 @@ type MigrationExecution struct {
 
 	WorkerID    string     `gorm:"size:160;not null;default:''"`
 	Attempts    int        `gorm:"not null;default:0"`
+	SQLRuns     int        `gorm:"column:sql_runs;not null;default:0"`
 	NotBefore   *time.Time `gorm:"index"`
 	PublishedAt *time.Time
 
