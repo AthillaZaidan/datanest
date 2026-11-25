@@ -13,6 +13,7 @@ type Event struct {
 	Kind        models.ExecutionKind
 	Status      models.ExecutionStatus
 	Reverts     *uint
+	Continues   *uint
 }
 
 // Applied is a migration in the active stack and the execution that applied it.
@@ -21,23 +22,33 @@ type Applied struct {
 	ExecutionID uint
 }
 
+type Partial struct {
+	ExecutionID uint
+	MigrationID uint
+	Kind        models.ExecutionKind
+	Reverts     *uint
+}
+
 // State is the active position of one database, derived from its executions in run
 // order and never stored separately:
 //   - a successful run or forward puts its migration on top of the active stack;
 //   - a successful rollback takes it off again;
-//   - anything else (failed, pending, rejected...) changes nothing.
+//   - anything else (failed, partial, pending, rejected...) leaves the active stack as it is.
 type State struct {
 	// Active is bottom-first; the last element is the top (the only one that may be rolled back).
 	Active []Applied
-	// Redo holds migrations that may be forwarded: tried before, not active now, and not
-	// discarded by a later run of a new migration (undo/redo: a new run clears redo).
-	Redo map[uint]bool
-	// Started holds every migration that has had an execution start, so a further
-	// attempt must be a forward, not a run.
+	// Redo holds migrations that may be forwarded in version order: rolled back (or failed
+	// above one that was), and not discarded by a newer migration being applied (undo/redo:
+	// a new run clears redo).
+	Redo  map[uint]bool
+	Retry uint
+	// Started holds every migration that has had a run or forward start; once it has a
+	// version, a further attempt must be a forward, not a run.
 	Started map[uint]bool
 	// Open holds migrations with an execution that has not reached a final status
-	// (waiting for review or the queue, running, uncertain or partial).
-	Open map[uint]bool
+	// (waiting for review or the queue, running or uncertain).
+	Open    map[uint]bool
+	Partial *Partial
 }
 
 // started is true once a worker picked the execution up; earlier statuses are requests.
@@ -53,7 +64,7 @@ func started(s models.ExecutionStatus) bool {
 func open(s models.ExecutionStatus) bool {
 	switch s {
 	case models.ExecPendingReview, models.ExecApproved, models.ExecQueued, models.ExecRunning,
-		models.ExecUncertain, models.ExecPartial:
+		models.ExecUncertain:
 		return true
 	}
 	return false
@@ -71,30 +82,79 @@ func Derive(events []Event) State {
 			continue
 		}
 		ok := e.Status == models.ExecSuccess
+		applied := Applied{MigrationID: e.MigrationID, ExecutionID: e.ID}
 		switch e.Kind {
 		case models.ExecKindRun:
 			st.Started[e.MigrationID] = true
-			// Running a new migration discards the redo history, whatever its outcome.
-			clear(st.Redo)
-			if ok {
-				st.Active = append(st.Active, Applied{MigrationID: e.MigrationID, ExecutionID: e.ID})
-			} else {
-				st.Redo[e.MigrationID] = true // a failed attempt may be forwarded
+			switch e.Status {
+			case models.ExecSuccess:
+				st.discard()
+				st.Active = append(st.Active, applied)
+			case models.ExecPartial:
+				st.discard()
+			case models.ExecFailed:
+				st.Retry = e.MigrationID
 			}
 		case models.ExecKindForward:
 			st.Started[e.MigrationID] = true
 			if ok {
-				st.Active = append(st.Active, Applied{MigrationID: e.MigrationID, ExecutionID: e.ID})
-				delete(st.Redo, e.MigrationID)
+				if st.Partial.continuedBy(e) {
+					st.Partial = nil
+				}
+				if e.MigrationID == st.Retry {
+					st.discard()
+				} else {
+					delete(st.Redo, e.MigrationID)
+				}
+				st.Active = append(st.Active, applied)
 			}
 		case models.ExecKindRollback:
-			if n := len(st.Active); ok && n > 0 && e.Reverts != nil && st.Active[n-1].ExecutionID == *e.Reverts {
-				st.Active = st.Active[:n-1]
-				st.Redo[e.MigrationID] = true
+			if ok {
+				st.rollback(e)
 			}
+		}
+		if e.Status == models.ExecPartial {
+			st.Partial = &Partial{ExecutionID: e.ID, MigrationID: e.MigrationID, Kind: e.Kind, Reverts: e.Reverts}
 		}
 	}
 	return st
+}
+
+func (s *State) discard() {
+	clear(s.Redo)
+	s.Retry = 0
+}
+
+func (s *State) rollback(e Event) {
+	n := len(s.Active)
+	onTop := n > 0 && refersTo(e.Reverts, s.Active[n-1].ExecutionID)
+	settles := s.Partial.continuedBy(e) || s.Partial.undoneBy(e)
+	if !onTop && !settles {
+		return
+	}
+	if onTop {
+		s.Active = s.Active[:n-1]
+	}
+	if settles {
+		s.Partial = nil
+	}
+	s.Redo[e.MigrationID] = true
+	if s.Retry != 0 {
+		s.Redo[s.Retry] = true
+		s.Retry = 0
+	}
+}
+
+func (p *Partial) continuedBy(e Event) bool {
+	return p != nil && refersTo(e.Continues, p.ExecutionID)
+}
+
+func (p *Partial) undoneBy(e Event) bool {
+	return p != nil && p.Kind != models.ExecKindRollback && refersTo(e.Reverts, p.ExecutionID)
+}
+
+func refersTo(id *uint, executionID uint) bool {
+	return id != nil && *id == executionID
 }
 
 // Top is the migration on top of the active stack.
