@@ -24,6 +24,10 @@ func ReplaceAttr(groups []string, a slog.Attr) slog.Attr {
 		a.Key = AttrEvent
 		return a
 	}
+	return MaskAttr(a)
+}
+
+func MaskAttr(a slog.Attr) slog.Attr {
 	if Sensitive(a.Key) {
 		return slog.String(a.Key, Redacted)
 	}
