@@ -1013,3 +1013,159 @@ Penelusuran stdout, stderr, dan Loki setelah skenario tidak menemukan password a
 lokal (jangan buka port `3000`, `9090`, `9100`-`9102` ke jaringan). Counter direset saat proses restart; Prometheus menangani
 reset itu pada `rate()` dan `increase()`. Data observability disimpan di volume `lgtm-data`; `docker compose down -v`
 menghapusnya bersama data lain.
+
+### 19. Bonus: stress test dengan k6
+
+**Beban normal yang ditetapkan tim:** 10 pengguna yang membaca API terus-menerus (satu request lalu jeda 1 detik, kira-kira
+10 request/detik), ditambah 6 pengajuan migration per menit ke satu database yang sama dan 6 per menit yang tersebar ke tiga
+database lain. Angka ini sesuai pemakaian tim kecil: beberapa developer membuka explorer dan riwayat sambil sesekali menjalankan
+migration. Beban lalu dinaikkan bertahap ke 3x, 10x, dan 30x, kemudian diturunkan lagi ke normal untuk melihat pemulihan.
+
+| Tahap | Lama | Pengguna API | Job/menit (per skenario) |
+| --- | --- | --- | --- |
+| naik ke normal | 30 s | 0 → 10 | 0 → 6 |
+| `normal` | 60 s | 10 | 6 |
+| naik | 30 s | → 30 | → 18 |
+| `high` (3x) | 60 s | 30 | 18 |
+| naik | 30 s | → 100 | → 60 |
+| `peak` (10x) | 60 s | 100 | 60 |
+| naik | 30 s | → 300 | → 180 |
+| `stress` (30x) | 60 s | 300 | 180 |
+| turun | 30 s | → 10 | → 6 |
+| `recovery` | 90 s | 10 | 6 |
+| selesai | 20 s | → 0 | → 0 |
+
+**Script** (`loadtest/stress.js`) menjalankan tiga skenario k6 bersamaan:
+
+| Skenario | Executor | Yang dilakukan |
+| --- | --- | --- |
+| `api` | `ramping-vus` | Setiap pengguna login sekali (bergantian `developer` dan `reviewer`), lalu berulang memanggil salah satu dari: daftar database, daftar table, isi table `lt_items` (halaman acak, 50 row), riwayat eksekusi, atau `/api/auth/me`, dengan jeda 1 detik. |
+| `jobs_same_db` | `ramping-arrival-rate` | Setiap iterasi membuat migration baru di `loadtest_a`, mengajukannya, disetujui leader Tim Developer dan Tim Reviewer (`POST .../approve` dua kali, sesuai alur approval), lalu memantau `GET /api/executions/:id` tiap 0,5 detik sampai status akhir (batas 180 detik). |
+| `jobs_spread` | `ramping-arrival-rate` | Sama, tetapi bergiliran ke `loadtest_b`, `loadtest_c`, dan `loadtest_d`, sehingga bisa jalan paralel. |
+
+Setiap job menjalankan `UPDATE lt_items SET qty = qty + 1` untuk seperempat dari 1.000.000 row (250.000 row) dengan SQL down
+yang membalikkannya. `setup()` mendaftarkan keempat database lewat API admin, memberi grant, dan membuat ulang table
+`lt_items` lewat migration yang disetujui. Respons pengajuan tidak dihitung sebagai keberhasilan: job baru dianggap berhasil
+bila statusnya menjadi `success`. Metrik yang dicatat:
+
+| Metrik | Arti |
+| --- | --- |
+| `http_req_duration{type:api}`, `http_reqs`, `http_req_failed` | Response time (p50, p95), throughput, dan error rate request baca API. Request polling dan pengajuan diberi tag terpisah (`poll`, `submit`), jadi tidak tercampur. |
+| `job_queue_wait` | `startedAt - queuedAt` dari respons eksekusi (dua-duanya dari jam database platform; field `queuedAt` ditambahkan untuk ini). |
+| `job_run_duration` | `finishedAt - startedAt`. |
+| `job_end_to_end` | Dari pengajuan sampai k6 melihat status akhir (resolusi 0,5 detik karena interval polling). |
+| `jobs_done`, `job_success` | Throughput penyelesaian job dan persentase job yang berakhir `success`. |
+
+Setiap request dan metrik job diberi tag `stage`, sehingga hasilnya dilaporkan per tahap.
+
+| Threshold | Syarat |
+| --- | --- |
+| `http_req_duration{type:api}` | p95 < 500 ms |
+| `http_req_failed{type:api}` | < 1% |
+| `http_req_duration{type:submit}` | p95 < 1000 ms |
+| `http_req_failed{type:submit}` | < 1% |
+| `job_success` | > 95% |
+
+Threshold tambahan berbentuk `count>=0` atau `max>=0` di script hanya dipakai agar k6 menampilkan angka per tahap; yang menentukan
+lulus atau gagal adalah lima threshold di atas.
+
+**Menjalankan.** Butuh stack yang sudah menyala (database, RabbitMQ, server, dan dua worker seperti bagian 18), plus k6
+(`brew install k6`):
+
+```bash
+./loadtest/prepare.sh
+SUMMARY_DIR=loadtest/results/baru k6 run loadtest/stress.js
+```
+
+`prepare.sh` membuat database `loadtest_a` sampai `loadtest_d` di `target-pg` bila belum ada. Ringkasan per tahap ditulis ke
+`summary.md` dan seluruh metrik ke `summary.json`. `QUICK=1` menjalankan versi 10 kali lebih singkat untuk memeriksa script.
+Hasil di bawah diambil pada 26 November 2026 di satu MacBook Air: k6, server, dua worker, Postgres, dan RabbitMQ berjalan di mesin
+yang sama, dengan database platform terpisah yang baru dibuat (`datanest_loadtest`).
+
+**Hasil sesudah perbaikan** (`loadtest/results/3-after-fix`), dari sisi k6:
+
+| Tahap | VU API | Job/menit per skenario | API p50 | API p95 | API req/s | API error | Submit p95 | Job selesai (same / spread) | Job sukses | Queue wait p95 (same / spread) | Durasi job p95 (same / spread) | Submit sampai selesai p95 (same / spread) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| normal | 10 | 6 | 5 ms | 67 ms | 9.9 | 0.00% | 15 ms | 6 / 6 | 100.0% | 9 ms / 10 ms | 671 ms / 621 ms | 1039 ms / 1041 ms |
+| high | 30 | 18 | 4 ms | 58 ms | 29.6 | 0.00% | 16 ms | 18 / 18 | 100.0% | 11 ms / 11 ms | 805 ms / 712 ms | 1048 ms / 1047 ms |
+| peak | 100 | 60 | 18 ms | 649 ms | 89.5 | 0.00% | 136 ms | 43 / 56 | 93.4% | 150324 ms / 132993 ms | 6813 ms / 7630 ms | 154545 ms / 142114 ms |
+| stress | 300 | 180 | 141 ms | 5047 ms | 121.6 | 15.75% | 283 ms | 24 / 75 | 49.7% | 175975 ms / 172050 ms | 10579 ms / 9608 ms | 177838 ms / 174317 ms |
+| recovery | 10 | 6 | 11 ms | 356 ms | 9.3 | 0.00% | 39 ms | 3 / 9 | 66.7% | 16 ms / 164932 ms | 2496 ms / 3028 ms | 3076 ms / 166037 ms |
+
+Dari sisi server (Prometheus, dihitung pada jendela tiap tahap):
+
+| Tahap | Antrean maks | Umur antrean tertua maks | Queue wait p95 | Durasi job p95 | Job sukses | Tertolak lock/held | HTTP 401/5xx | Koneksi platform in use maks | Tunggu koneksi platform rata-rata | CPU proses |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| normal | 0 | 0.0 s | 0.0 s | 0.9 s | 12 | 0 | - | 1 | 0.0 ms | worker 0%, server 4% |
+| high | 0 | 0.0 s | 0.0 s | 1.0 s | 36 | 0 | - | 1 | 0.0 ms | worker 1%, server 5% |
+| peak | 29 | 73.4 s | 12.2 s | 5.8 s | 73 | 153 | - | 4 | 13.6 ms | worker 1%, server 21% |
+| stress | 239 | 163.5 s | 98.2 s | 18.3 s | 29 | 1873 | 504:1153 | 23 | 20.6 ms | worker 5%, server 91% |
+| recovery | 280 | 263.4 s | 285.9 s | 4.8 s | 104 | 3361 | - | 22 | 10.3 ms | worker 5%, server 36% |
+
+**Analisis per tahap.**
+
+- **normal dan high (1x dan 3x).** Sistem jauh di bawah batas. p95 API 58 sampai 67 ms, tanpa error, semua job sukses,
+  waktu tunggu antrean sekitar 10 ms, dan satu job selesai sekitar 1 detik setelah diajukan (0,6 sampai 0,8 detik menjalankan
+  UPDATE, sisanya resolusi polling). Kedua threshold API lulus pada tahap ini.
+- **peak (10x).** Database target mulai menjadi batas. Durasi satu job naik dari 0,7 detik ke 6 sampai 7 detik, karena empat
+  UPDATE besar berjalan bersamaan di satu instance Postgres dan table makin penuh dead tuple (setelah tes, `loadtest_a` masih
+  menyimpan 751.000 dead tuple). Job datang lebih cepat daripada yang bisa diselesaikan (2 job/detik), sehingga antrean tumbuh
+  sampai 29 dan waktu tunggu p95 naik ke 130 sampai 150 detik. Lock per database bekerja sesuai desain: hanya satu migration per
+  database, sisanya tertolak lock atau ditahan (153 kali). p95 API naik ke 649 ms dan melewati threshold. Penyebabnya route
+  explorer yang membaca database target yang sama (p95 isi table 1,9 detik di sisi server), sedangkan route yang hanya membaca
+  database platform tetap di bawah 250 ms.
+- **stress (30x).** Batas terlampaui. 15,8% request API gagal, semuanya 504 dari explorer yang melewati `TARGET_QUERY_TIMEOUT`
+  (5 detik) saat database target sibuk. Tidak ada 401 atau 500. Throughput API berhenti di sekitar 120 request/detik walaupun
+  pengguna naik ke 300. Server memakai 91% satu core CPU. Antrean job mencapai 239, 270 iterasi job tidak sempat dimulai tepat
+  waktu oleh k6 (`dropped_iterations`), dan hanya 49,7% job yang selesai dalam 180 detik. Pool koneksi platform milik server
+  mencapai batasnya (20 koneksi in use; tiap worker hanya 2), dengan waktu tunggu rata-rata 21 ms.
+- **recovery.** API pulih: p95 kembali ke 356 ms dan tanpa error dalam 90 detik. Antrean job belum habis (280 job, umur
+  tertua 263 detik) dan dikerjakan sekitar 1,2 job per detik. Job baru di `loadtest_a` sudah kembali menunggu 16 ms, sedangkan
+  yang tersebar masih di belakang sisa antrean. Pemulihan job butuh beberapa menit lagi setelah beban turun. Tidak ada job yang
+  dijalankan dua kali.
+- **Sama atau berbeda database.** Pada beban rendah keduanya setara. Begitu database target menjadi batas, keduanya sama-sama
+  mengantre, karena keempat database berbagi satu Postgres dan delapan slot worker. Banyaknya penolakan lock (153 lalu 1.873)
+  juga dipengaruhi masalah yang diketahui di bawah.
+
+**Hasil sebelum perbaikan** (`loadtest/results/2-before-fix`), dengan beban yang sama:
+
+| Tahap | VU API | Job/menit per skenario | API p50 | API p95 | API req/s | API error | Submit p95 | Job selesai (same / spread) | Job sukses | Queue wait p95 (same / spread) | Durasi job p95 (same / spread) | Submit sampai selesai p95 (same / spread) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| normal | 10 | 6 | 5 ms | 27 ms | 10.0 | 0.00% | 16 ms | 6 / 6 | 100.0% | 8 ms / 5 ms | 672 ms / 597 ms | 1052 ms / 1052 ms |
+| high | 30 | 18 | 5 ms | 30 ms | 29.8 | 0.00% | 26 ms | 18 / 18 | 100.0% | 9 ms / 15 ms | 753 ms / 774 ms | 1076 ms / 1088 ms |
+| peak | 100 | 60 | 18 ms | 248 ms | 94.4 | 0.00% | 170 ms | 34 / 60 | 84.7% | 42069 ms / 65 ms | 5320 ms / 9193 ms | 43709 ms / 9804 ms |
+| stress | 300 | 180 | 596 ms | 5525 ms | 107.0 | 37.86% | 1819 ms | 4 / 23 | 11.5% | 163338 ms / 160428 ms | 27376 ms / 30816 ms | 170906 ms / 170575 ms |
+| recovery | 10 | 6 | 713 ms | 5024 ms | 4.4 | 3.83% | 5551 ms | 0 / 3 | 16.7% | - / 172201 ms | - / 1144 ms | - / 175587 ms |
+
+| Tahap | Antrean maks | Umur antrean tertua maks | Queue wait p95 | Durasi job p95 | Job sukses | Tertolak lock/held | HTTP 401/5xx | Koneksi platform in use maks | Tunggu koneksi platform rata-rata | CPU proses |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| normal | 0 | 0.0 s | 0.0 s | 1.0 s | 12 | 0 | - | 1 | 0.0 ms | worker 0%, server 5% |
+| high | 0 | 0.0 s | 0.0 s | 1.0 s | 36 | 0 | - | 1 | 0.0 ms | worker 1%, server 7% |
+| peak | 16 | 52.4 s | 9.6 s | 2.4 s | 88 | 72 | - | 66 | 0.0 ms | worker 1%, server 32% |
+| stress | 144 | 142.4 s | 57.0 s | 26.8 s | 14 | 795 | 401:2313, 500:170, 504:1374 | 266 | 0.0 ms | worker 2%, server 76% |
+| recovery | 158 | 257.7 s | 281.1 s | 26.7 s | 21 | 1574 | 401:84, 500:23, 504:8 | 149 | 0.0 ms | worker 4%, server 34% |
+
+**Temuan dan perbaikan.** Run sebelum perbaikan menunjukkan tiga masalah yang bukan sekadar batas kapasitas:
+
+| Temuan | Bukti | Perbaikan |
+| --- | --- | --- |
+| Pool koneksi database platform tidak dibatasi. Di tahap stress, tiga proses memakai sampai 266 koneksi, sedangkan Postgres menolak di atas 100 (`FATAL: sorry, too many clients already`). | Koneksi platform in use 266; error 500 di login, approval, dan polling. | `PLATFORM_MAX_OPEN_CONNS` (default 20 per proses). Kelebihan permintaan menunggu di pool, terlihat di `datanest_db_pool_wait_*`, bukan gagal. Commit "fix: cap the platform pool in the server and worker..." |
+| Login dengan password benar dijawab `401 INVALID_CREDENTIALS` saat database platform tidak bisa dijangkau, karena semua error query user dianggap password salah. | 57 login gagal dengan 401, padahal akunnya benar. | Error selain "user tidak ada" menjadi 500. Commit "fix(auth): report a database outage as a server error..." |
+| Pemeriksaan session yang gagal karena database dianggap tidak login (401), sehingga SPA mengeluarkan pengguna. | 2.313 respons 401 di tahap stress. | Hanya session yang benar-benar tidak valid yang menjadi 401; gangguan database menjadi 500 dan session tetap ada. Commit yang sama. |
+
+Masing-masing diuji di `backend/internal/httpapi/auth_outage_integration_test.go` dan `backend/internal/dbconn/platform_integration_test.go`.
+Dampaknya pada beban yang sama: error API di tahap stress turun dari 37,9% ke 15,8% (sisanya timeout explorer). Respons 401 dan 500
+hilang. Pada tahap recovery, p95 API turun dari 5.024 ms ke 356 ms dan error dari 3,8% ke 0%. Job yang selesai di tahap recovery naik
+dari 3 ke 12. Total request yang dilayani naik dari 53.876 ke 118.960. Histogram latensi API juga dilebarkan sampai 30 detik, karena
+bucket lama berhenti di 2,5 detik dan menyembunyikan angka di tahap stress.
+
+Run pertama yang lebih ringan (`loadtest/results/1-light`: job 20.000 row, puncak 10x tanpa tahap 30x) lulus semua threshold,
+dengan p95 API 12 sampai 20 ms dan 120 dari 120 job sukses di puncak. Dari situ beban dinaikkan sampai titik jenuhnya terlihat.
+
+**Masalah yang diketahui (belum diperbaiki).** Dengan dua worker, sweeper di kedua worker bisa menerbitkan job yang sama. Pesan
+kedua tertolak lock, lalu menjadwalkan ulang eksekusi (`not_before` 5 detik), sehingga klaim pemegang lock ikut gagal dan job
+menunggu satu siklus sweeper lagi. Data tetap aman (tidak ada commit ganda), tetapi penolakan lock dan waktu tunggu antrean
+menjadi lebih besar daripada seharusnya. Kesimpulan ini diambil dari log satu run dan belum dibuktikan dengan test.
+
+**Batasan.** Semua komponen berbagi satu laptop, termasuk k6 sendiri, sehingga angka absolutnya hanya berlaku untuk mesin ini.
+Keempat database target berada di satu container Postgres. Polling 0,5 detik membuat k6 ikut menambah beban saat job menumpuk.
