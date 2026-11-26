@@ -91,6 +91,10 @@ cd backend && go run ./cmd/worker
 Worker adalah satu-satunya yang menjalankan SQL migration. Tanpa worker, pengajuan yang sudah disetujui tetap berstatus
 **Dalam antrean** dan berjalan begitu worker dinyalakan.
 
+Worker kedua (misalnya untuk melihat lock lintas worker) dijalankan dengan port metrics lain:
+`WORKER_METRICS_ADDR=:9102 go run ./cmd/worker`. Untuk Grafana, Prometheus, Loki, dan Tempo lihat
+[18. Bonus: observability](#18-bonus-observability-collector-prometheus-dan-grafana).
+
 **6. Buka http://localhost:8080.** Pakai alamat ini persis: request dari origin lain (misalnya `127.0.0.1:8080`) ditolak
 oleh pemeriksaan `Origin`, sehingga login, simpan, dan logout gagal dengan 403. Di halaman login, klik salah satu **Akun demo**
 untuk mengisi form, lalu **Masuk**.
@@ -164,7 +168,10 @@ Backend membaca `backend/.env` lalu `.env` di root repo; variabel environment ya
 | `WORKER_SWEEP_INTERVAL` | `5s` | Jeda sweeper mencari job yang perlu diterbitkan ulang atau dipulihkan. |
 | `WORKER_REPUBLISH_AFTER` | `30s` | Job yang sudah diterbitkan tetapi belum diklaim diterbitkan ulang setelah selama ini. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, atau `error`. Log berbentuk JSON di stdout. |
-| `TRACE_EXPORTER` | `console` | `console` menulis span ke stderr; `none` mematikan tracing. |
+| `TRACE_EXPORTER` | `console` | `console` menulis span ke stderr; `none` mematikan keluaran console (span tetap dikirim lewat OTLP bila `OTLP_ENDPOINT` diisi). |
+| `OTLP_ENDPOINT` | kosong | Bonus observability. Alamat OTLP/HTTP OpenTelemetry Collector, misalnya `http://localhost:4318`. Bila diisi, log dan span juga dikirim ke Collector; log JSON di stdout tetap ada. |
+| `METRICS_ADDR` | `:9100` | Bonus observability. Alamat endpoint Prometheus `/metrics` milik server, terpisah dari port API. `off` mematikannya. |
+| `WORKER_METRICS_ADDR` | `:9101` | Bonus observability. Alamat `/metrics` milik worker. Worker kedua di mesin yang sama harus memakai alamat lain (`:9102`); worker berhenti dengan error bila port sudah dipakai. |
 | `TEST_PLATFORM_DSN`, `TEST_TARGET_DSN` | ke `test-pg` | Hanya untuk integration test. |
 | `TEST_AMQP_URL` | `amqp://datanest:datanest@localhost:15673/` | Hanya untuk integration test yang memakai RabbitMQ. |
 
@@ -815,3 +822,185 @@ Keluaran exporter console untuk dua span dari trace yang sama (`c306750d520d6035
 
 Span yang gagal (`sql.query`, `execute`, dan `worker.process`) diberi status `Error` beserta pesan errornya, dan span request
 berstatus `Error` untuk respons 5xx.
+
+### 18. Bonus: observability (Collector, Prometheus, dan Grafana)
+
+**Komponen.** Satu container `grafana/otel-lgtm:0.41.1` (profile compose `observability`) berisi OpenTelemetry Collector,
+Prometheus, Loki (log), Tempo (trace), dan Grafana. Image ini dibuat Grafana Labs untuk development dan demo, cukup untuk
+menjalankan ulang bonus ini di mesin mana pun. Server dan worker tetap jalan di host (`go run`).
+
+```
+server (:8080 API, :9100 /metrics) --OTLP/HTTP log + span--> Collector (:4318) --> Loki, Tempo
+worker (:9101 /metrics)            --OTLP/HTTP log + span--> Collector
+worker kedua (:9102 /metrics)      --OTLP/HTTP log + span--> Collector
+Prometheus --scrape tiap 5 detik--> host.docker.internal:9100, :9101, :9102
+Grafana (:3000) --query--> Prometheus, Loki, Tempo
+```
+
+Log dan trace didorong (push) ke Collector; metrik ditarik (pull) Prometheus dari endpoint berformat Prometheus. Prometheus
+berada di dalam container, jadi target scrape memakai `host.docker.internal` (di Linux nama itu disediakan oleh
+`extra_hosts: host-gateway` di `docker-compose.yml`). `/metrics` server sengaja tidak dipasang di port API `:8080` supaya
+tidak ikut terbuka bersama SPA dan API.
+
+**Menjalankan.**
+
+```bash
+docker compose --profile observability up -d --wait
+```
+
+```bash
+cd backend && OTLP_ENDPOINT=http://localhost:4318 TRACE_EXPORTER=none go run ./cmd/server
+```
+
+```bash
+cd backend && OTLP_ENDPOINT=http://localhost:4318 TRACE_EXPORTER=none go run ./cmd/worker
+```
+
+```bash
+cd backend && OTLP_ENDPOINT=http://localhost:4318 TRACE_EXPORTER=none WORKER_METRICS_ADDR=:9102 go run ./cmd/worker
+```
+
+Buka http://localhost:3000, folder **DataNest**, dashboard **DataNest: queue, migrations and connection pools**. Prometheus
+ada di http://localhost:9090 (menu Status, Targets menunjukkan ketiga proses). `TRACE_EXPORTER=none` hanya mematikan span di
+stderr; tanpa `OTLP_ENDPOINT` semuanya kembali seperti bagian 17 (log di stdout, span di console).
+
+| File | Isi |
+| --- | --- |
+| `docker/observability/prometheus.yaml` | Konfigurasi Prometheus bawaan image ditambah `scrape_configs` untuk server dan dua worker. Exemplar storage sudah aktif di image. |
+| `docker/observability/grafana-dashboards.yaml` | Provider dashboard Grafana: memuat semua JSON di folder `dashboards/` saat container start. |
+| `docker/observability/dashboards/datanest.json` | Dashboard (provisioning, tidak bisa diubah dari UI). Datasource memakai UID bawaan image: `prometheus`, `loki`, `tempo`. |
+| `backend/internal/metrics` | Definisi metrik, collector pool koneksi dan status execution, handler `/metrics`. |
+| `backend/internal/obs/setup.go`, `fanout.go` | Exporter OTLP untuk span dan log, handler `slog` yang mengirim ke stdout dan Collector sekaligus. |
+
+**Metrik.** Semua bernama `datanest_*`. Label hanya berisi nilai yang jumlahnya tetap: `kind` (`run`, `forward`, `rollback`),
+`mode` (`normal`, `batch`), `outcome` atau `status` (daftar tetap), `route` (template route Gin seperti
+`/api/executions/:executionId`, bukan path mentah; method tak dikenal menjadi `OTHER`), `pool` (`platform`, `target`), dan
+`database` (nama koneksi yang didaftarkan admin). User ID, execution/job ID, SQL, dan ID worker tidak pernah menjadi label;
+proses dibedakan oleh label `instance` dari Prometheus. Trace ID hanya muncul sebagai *exemplar*, bukan label.
+
+| Kebutuhan spesifikasi | Metrik | Tipe | Proses |
+| --- | --- | --- | --- |
+| Job menunggu / berjalan / selesai / gagal | `datanest_executions{status}` (dibaca dari database platform setiap scrape, semua 10 status) | gauge | server |
+| Umur job tertua di antrean | `datanest_queue_oldest_wait_seconds` | gauge | server |
+| Hasil setiap attempt, termasuk retry | `datanest_job_attempts_total{kind,mode,outcome}`; `outcome` = `success`, `failed`, `partial`, `uncertain`, `retry` (dijadwalkan ulang), `lock_lost` | counter | worker |
+| Job yang sedang dijalankan | `datanest_worker_jobs_in_progress{kind,mode}` | gauge | worker |
+| Waktu tunggu queue | `datanest_job_queue_wait_seconds{kind,mode}`: `queued_at` sampai klaim pertama, dihitung dari jam database platform | histogram | worker |
+| Waktu tunggu lock | `datanest_job_claims_total{outcome}` (`lock_busy` = database sedang dikunci eksekusi lain, `held` = tertahan eksekusi yang belum tuntas) dan `datanest_lock_acquire_seconds{result}` | counter, histogram | worker |
+| Durasi migration | `datanest_migration_duration_seconds{kind,mode,outcome}`: klaim sampai hasil tercatat | histogram | worker |
+| Batch dan row diproses | `datanest_migration_batches_committed_total`, `datanest_migration_rows_processed_total`, `datanest_migration_batch_duration_seconds` (`{kind,mode}`) | counter, histogram | worker |
+| Pool koneksi aktif / idle | `datanest_db_pool_connections{pool,database,state}` (`state` = `in_use`, `idle`), `datanest_db_pool_max_open_connections` | gauge | server, worker |
+| Waktu tunggu koneksi | `datanest_db_pool_wait_total`, `datanest_db_pool_wait_seconds_total` | counter | server, worker |
+| Tambahan untuk API | `datanest_http_requests_total{method,route,code}`, `datanest_http_request_duration_seconds{method,route}` | counter, histogram | server |
+
+Lock per database diambil dengan satu `INSERT ... ON CONFLICT` yang tidak menunggu (bagian 15): bila lock dipegang eksekusi
+lain, job dijadwalkan ulang. Karena itu "waktu tunggu lock" tidak diukur sebagai durasi satu panggilan. Yang dicatat adalah
+berapa kali job tertolak lock (`lock_busy`) dan tertahan (`held`), dan lamanya sudah termasuk di waktu tunggu queue, karena
+`queued_at` sampai klaim pertama mencakup semua penolakan itu. Waktu tunggu queue hanya diukur pada attempt pertama, supaya
+retry tidak menghitungnya dua kali. Histogram durasi dan waktu tunggu memakai bucket sampai 300 detik (bawaan library berhenti
+di 10 detik). Saat worker start, semua kombinasi label yang dikenal dibuat dengan nilai 0, supaya `rate()` dan
+`increase()` sudah menangkap job pertama. `datanest_executions` hanya diekspos server, sehingga dua worker tidak membuat
+hitungannya ganda.
+
+**Log dan trace lewat Collector.** Dengan `OTLP_ENDPOINT`, `obs.Setup` memasang exporter OTLP/HTTP untuk span (`/v1/traces`)
+dan log (`/v1/logs`, lewat bridge `otelslog`), dengan resource `service.name` = `datanest-server` atau `datanest-worker`,
+`service.instance.id` (host dan PID), dan `service.namespace` = `datanest`. Handler `slog` mengirim setiap baris ke dua
+tujuan: JSON di stdout seperti bagian 17, dan Collector. Masking bagian 17 (`MaskAttr`, dipakai juga oleh `ReplaceAttr`)
+dijalankan pada kedua jalur, termasuk atribut di dalam group dan atribut dari `With`. Test
+`TestSetupShipsMaskedLogsAndSpansOverOTLP` memeriksanya dengan collector palsu yang membaca protobuf OTLP. Batch exporter
+tidak menahan request bila Collector mati; saat proses berhenti, sisa data dikirim dengan batas waktu 5 detik. Contoh span
+console di bagian 17 diambil sebelum resource ini ada, jadi masih menulis `unknown_service`.
+
+**Korelasi di Grafana** (datasource bawaan image): exemplar histogram membawa `trace_id` dan membuka trace di Tempo; trace di
+Tempo punya tombol ke log Loki dengan `trace_id` yang sama; log Loki punya tautan `trace_id` ke Tempo. Semua log juga membawa
+`correlation_id` (sama dengan header `X-Request-ID`).
+
+Isi dashboard:
+
+| Baris | Panel |
+| --- | --- |
+| Queue and migrations | Execution per status, antrean, berjalan, sukses, gagal, partial atau uncertain, umur antrean tertua, retry, worker hidup; attempt per menit per outcome; waktu tunggu queue p50/p95 (dengan exemplar); lock contention; latensi lock; durasi migration p50/p95 (dengan exemplar); batch per menit; row per detik; job berjalan per worker; durasi transaction batch |
+| Database connection pools | Koneksi in use dan idle per proses, pool, dan database; rata-rata waktu tunggu koneksi |
+| API | Latensi p95 per route; request per detik per status code |
+| Logs and traces | Log server dan worker dari Loki (filter level); trace terbaru dari Tempo |
+
+**Contoh hasil nyata** (26 November 2026, server dan dua worker sungguhan, `otel-lgtm` di Docker, database demo terpisah
+`obsdemo_a` dan `obsdemo_b` berisi 400.000 row; nama host diganti `host`). Skenario: dua migration normal membuat table,
+tiga migration per batch (dua di `obsdemo_a`, sehingga yang kedua menunggu lock), satu migration yang gagal, satu rollback per
+batch, dan satu migration per batch berukuran 40.000 row.
+
+Status target Prometheus dan beberapa query setelah skenario:
+
+```
+up{job=~"datanest.*"}
+  {instance="host.docker.internal:9100", job="datanest-server"} 1
+  {instance="host.docker.internal:9101", job="datanest-worker"} 1
+  {instance="host.docker.internal:9102", job="datanest-worker"} 1
+
+datanest_executions                         failed 1, success 5, status lain 0
+sum by (kind,mode,outcome) (datanest_job_attempts_total)
+  {kind="run", mode="normal", outcome="success"} 2
+  {kind="run", mode="batch",  outcome="success"} 3
+  {kind="run", mode="normal", outcome="failed"}  1
+sum by (outcome) (datanest_job_claims_total)
+  {outcome="claimed"} 6   {outcome="lock_busy"} 4   {outcome="skipped"} 2
+sum by (mode) (datanest_migration_batches_committed_total)
+  {mode="normal"} 2   {mode="batch"} 48
+sum by (mode) (datanest_migration_rows_processed_total)
+  {mode="batch"} 1200000
+histogram_quantile(0.95, sum by (le, mode) (rate(datanest_migration_duration_seconds_bucket[5m])))
+  {mode="normal"} 0.096   {mode="batch"} 2.36
+```
+
+`/metrics` worker (format OpenMetrics) setelah migration per batch execution 10. Bucket yang berisi observasi membawa exemplar
+`trace_id`:
+
+```
+datanest_job_attempts_total{kind="run",mode="batch",outcome="success"} 1.0
+datanest_migration_batches_committed_total{kind="run",mode="batch"} 10.0
+datanest_migration_rows_processed_total{kind="run",mode="batch"} 400000.0
+datanest_migration_duration_seconds_bucket{kind="run",mode="batch",outcome="success",le="1.0"} 1 # {trace_id="7b1d53445f86cfb7cf1aa558bb2b3e45"} 0.79374775 1.795691635125015e+09
+datanest_job_queue_wait_seconds_bucket{kind="run",mode="batch",le="0.01"} 1 # {trace_id="7b1d53445f86cfb7cf1aa558bb2b3e45"} 0.003776 1.7956916343312519e+09
+datanest_db_pool_connections{database="obsdemo_b",pool="target",state="idle"} 1.0
+datanest_db_pool_connections{database="obsdemo_b",pool="target",state="in_use"} 0.0
+```
+
+Trace yang sama di Tempo (dibaca lewat Grafana), dari persetujuan di server sampai SQL tiap batch di worker:
+
+```
+POST /api/executions/:executionId/approve   datanest-server  +    0.0 ms      7.2 ms
+  api.approve                               datanest-server  +    0.3 ms      5.6 ms
+    queue.publish                           datanest-server  +    4.2 ms      0.9 ms
+      worker.process                        datanest-worker  +    5.4 ms    795.3 ms
+        lock.acquire                        datanest-worker  +    5.4 ms      0.4 ms
+        execute                             datanest-worker  +    7.0 ms    792.4 ms
+          batch[1]                          datanest-worker  +   17.3 ms     65.2 ms
+            sql.query                       datanest-worker  +   18.4 ms     54.0 ms
+          batch[2]                          datanest-worker  +   85.1 ms     76.9 ms
+            sql.query                       datanest-worker  +   86.2 ms     64.5 ms
+          ...
+          batch[10]                         datanest-worker  +  721.7 ms     77.0 ms
+            sql.query                       datanest-worker  +  723.0 ms     73.2 ms
+```
+
+Log di Loki untuk `{service_name=~"datanest-.*"} | trace_id="7b1d53445f86cfb7cf1aa558bb2b3e45"` (36 baris; badan log berisi
+nama event, atribut menjadi structured metadata):
+
+```
+datanest-server execution.approved  execution_id=10 status=approved actor=reviewer span_id=a48d58c001b64acd correlation_id=ad713a2d4dd89830
+datanest-server queue.published     execution_id=10 span_id=54ebd40dd5265fcd correlation_id=ad713a2d4dd89830
+datanest-worker lock.acquired       execution_id=10 actor=developer span_id=4d77574b54928b1f correlation_id=ad713a2d4dd89830
+datanest-worker execution.claimed   execution_id=10 actor=developer span_id=4d77574b54928b1f correlation_id=ad713a2d4dd89830
+datanest-worker sql.start           execution_id=10 batch_no=1 status=started span_id=35b2f73bc7f4e5c8 correlation_id=ad713a2d4dd89830
+datanest-worker sql.result          execution_id=10 batch_no=1 status=ok rows=40000 span_id=35b2f73bc7f4e5c8 correlation_id=ad713a2d4dd89830
+datanest-worker sql.commit          execution_id=10 batch_no=1 status=committed rows=40000 span_id=e3794ec1421f5219 correlation_id=ad713a2d4dd89830
+```
+
+Jadi satu exemplar di histogram durasi membawa ke trace `7b1d5344...`, dan trace itu membawa ke 36 baris log dari dua proses
+dengan `correlation_id` yang sama. Label index Loki hanya `service_name`, `service_namespace`, dan `service_instance_id`.
+Penelusuran stdout, stderr, dan Loki setelah skenario tidak menemukan password akun, password koneksi, maupun
+`CREDENTIALS_KEY`.
+
+**Batasan.** Grafana di image ini membuka akses admin anonim dan `/metrics` tidak memakai autentikasi; keduanya hanya untuk
+lokal (jangan buka port `3000`, `9090`, `9100`-`9102` ke jaringan). Counter direset saat proses restart; Prometheus menangani
+reset itu pada `rate()` dan `increase()`. Data observability disimpan di volume `lgtm-data`; `docker compose down -v`
+menghapusnya bersama data lain.
