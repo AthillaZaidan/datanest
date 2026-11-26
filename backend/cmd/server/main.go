@@ -131,18 +131,12 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	errc := make(chan error, 2)
+	errc := make(chan error, 1)
 	go func() {
 		slog.Info("server.listening", "addr", srv.Addr)
 		errc <- srv.ListenAndServe()
 	}()
-	if cfg.MetricsAddr != "" {
-		go func() {
-			if err := metrics.Serve(ctx, cfg.MetricsAddr); err != nil {
-				errc <- err
-			}
-		}()
-	}
+	metrics.Start(ctx, cfg.MetricsAddr)
 
 	select {
 	case err := <-errc:

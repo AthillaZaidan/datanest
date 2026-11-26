@@ -124,21 +124,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	metricsErr := make(chan error, 1)
-	if cfg.Worker.MetricsAddr != "" {
-		go func() {
-			if err := metrics.Serve(ctx, cfg.Worker.MetricsAddr); err != nil {
-				metricsErr <- fmt.Errorf("metrics on %s: %w", cfg.Worker.MetricsAddr, err)
-				stop()
-			}
-		}()
-	}
+	metrics.Start(ctx, cfg.Worker.MetricsAddr)
 	slog.Info("worker.started", "slots", cfg.Worker.Concurrency, "queue", queue.JobsQueue)
-	err = w.Serve(ctx, cfg.AMQPURL, cfg.Worker.SweepInterval)
-	select {
-	case merr := <-metricsErr:
-		return merr
-	default:
-		return err
-	}
+	return w.Serve(ctx, cfg.AMQPURL, cfg.Worker.SweepInterval)
 }
