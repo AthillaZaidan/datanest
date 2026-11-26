@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
+	"github.com/AthillaZaidan/datanest/backend/internal/metrics"
 	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 	"github.com/AthillaZaidan/datanest/backend/internal/reqctx"
 )
@@ -34,6 +35,7 @@ func RequestLogger() gin.HandlerFunc {
 
 		started := time.Now()
 		c.Next()
+		metrics.ObserveHTTP(ctx, c.Request.Method, routeOf(c), c.Writer.Status(), time.Since(started))
 
 		attrs := []any{
 			obs.AttrMethod, c.Request.Method, obs.AttrPath, c.Request.URL.Path,
