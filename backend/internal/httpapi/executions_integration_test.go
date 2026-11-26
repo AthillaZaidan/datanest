@@ -122,3 +122,30 @@ func TestExecutionViewShowsTheMigrationVersionAndRevision(t *testing.T) {
 		t.Errorf("waiting execution = %d version %v revision %d, want none and 1", code, got.Version, got.Revision)
 	}
 }
+
+func TestExecutionViewShowsWhenItWasQueued(t *testing.T) {
+	platform := testutil.PlatformDB(t)
+	viewer := testutil.CreateUser(t, platform, "viewer")
+	conn := testutil.CreateDatabaseConnection(t, platform, "toko")
+	queued := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	started := queued.Add(1500 * time.Millisecond)
+	x := testutil.CreateExecution(t, platform, models.MigrationExecution{DatabaseID: conn.ID, Status: models.ExecRunning, QueuedAt: &queued, StartedAt: &started})
+	waiting := testutil.CreateExecution(t, platform, models.MigrationExecution{DatabaseID: conn.ID, Status: models.ExecPendingReview})
+	svc := execution.NewService(platform, fakeAuthz{viewer.ID: authz.View})
+	h := NewRouter(Deps{RequireAuth: testutil.AsUser(viewer.ID), Executions: svc})
+
+	var got struct {
+		QueuedAt  *time.Time `json:"queuedAt"`
+		StartedAt *time.Time `json:"startedAt"`
+	}
+	if code := getJSON(t, h, "/api/executions/"+itoa(x.ID), &got); code != 200 {
+		t.Fatalf("status = %d", code)
+	}
+	if got.QueuedAt == nil || !got.QueuedAt.Equal(queued) || got.StartedAt.Sub(*got.QueuedAt) != 1500*time.Millisecond {
+		t.Errorf("queuedAt = %v, startedAt = %v", got.QueuedAt, got.StartedAt)
+	}
+	got.QueuedAt = nil
+	if code := getJSON(t, h, "/api/executions/"+itoa(waiting.ID), &got); code != 200 || got.QueuedAt != nil {
+		t.Errorf("an execution still in review: status %d, queuedAt %v; want null", code, got.QueuedAt)
+	}
+}
