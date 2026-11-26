@@ -18,6 +18,9 @@ import (
 func (w *Worker) Run(ctx context.Context, cl *Claimed) error {
 	ctx = cl.bind(ctx)
 	defer cl.end()
+	started := time.Now()
+	defer trackInProgress(cl)()
+	defer recordAttempt(ctx, cl, started)
 	runCtx, cancel := context.WithCancelCause(ctx)
 	heartbeat := w.startHeartbeat(runCtx, cancel, cl)
 
@@ -35,6 +38,7 @@ func (w *Worker) Run(ctx context.Context, cl *Claimed) error {
 		return err
 	}
 	if lost && err != nil {
+		cl.outcome = outcomeLockLost
 		slog.WarnContext(ctx, obs.EventLockLost, logAttrs(&cl.Exec, "worker", cl.Owner)...)
 		return errLockLost
 	}
@@ -171,6 +175,7 @@ func (w *Worker) finalize(ctx context.Context, cl *Claimed, batches int, rows in
 			}
 		}
 		ok, err := w.store.Finish(wctx, e.ID, cl.Owner, models.ExecSuccess, "", "", batches, rows)
+		cl.outcome = outcomeSuccess
 		attempt(models.AttemptSuccess, "", "")
 		slog.InfoContext(ctx, "execution.finished", logAttrs(e, obs.AttrStatus, "success", "batches", batches, obs.AttrRows, rows)...)
 		return logIgnored(ok, err, "success")
@@ -182,6 +187,7 @@ func (w *Worker) finalize(ctx context.Context, cl *Claimed, batches int, rows in
 	case kindUnknown:
 		attempt(models.AttemptUncertain, code, message)
 		ok, err := w.store.MarkUncertain(wctx, e.ID, cl.Owner, 0, code, message)
+		cl.outcome = outcomeUncertain
 		slog.WarnContext(ctx, "execution.uncertain", logAttrs(e, obs.AttrStatus, "uncertain", "code", code)...)
 		return logIgnored(ok, err, "uncertain")
 
@@ -189,6 +195,7 @@ func (w *Worker) finalize(ctx context.Context, cl *Claimed, batches int, rows in
 		if cl.From == models.ExecUncertain {
 			attempt(models.AttemptUncertain, code, message)
 			ok, err := w.store.MarkUncertain(wctx, e.ID, cl.Owner, w.cfg.UncertainRetry, code, message)
+			cl.outcome = outcomeUncertain
 			slog.WarnContext(ctx, "execution.still_uncertain", logAttrs(e, obs.AttrStatus, "uncertain", "code", code)...)
 			return logIgnored(ok, err, "still uncertain")
 		}
@@ -196,6 +203,7 @@ func (w *Worker) finalize(ctx context.Context, cl *Claimed, batches int, rows in
 			attempt(models.AttemptFailed, code, message)
 			delay := withJitter(w.retryDelay(e.Attempts))
 			ok, err := w.store.Requeue(wctx, e.ID, cl.Owner, delay, code, message)
+			cl.outcome = outcomeRetry
 			slog.WarnContext(ctx, "execution.retry", logAttrs(e, obs.AttrAttempt, e.Attempts, "retry_in", delay, "code", code)...)
 			return logIgnored(ok, err, "requeue")
 		}
@@ -208,6 +216,7 @@ func (w *Worker) finalize(ctx context.Context, cl *Claimed, batches int, rows in
 	}
 	attempt(models.AttemptFailed, code, message)
 	ok, err := w.store.Finish(wctx, e.ID, cl.Owner, status, code, message, batches, rows)
+	cl.outcome = string(status)
 	slog.WarnContext(ctx, "execution.finished", logAttrs(e, obs.AttrStatus, string(status), "code", code, "batches", batches)...)
 	return logIgnored(ok, err, string(status))
 }

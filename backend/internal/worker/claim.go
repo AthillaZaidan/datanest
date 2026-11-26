@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/dblock"
 	"github.com/AthillaZaidan/datanest/backend/internal/execution"
+	"github.com/AthillaZaidan/datanest/backend/internal/metrics"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
 	"github.com/AthillaZaidan/datanest/backend/internal/obs"
 )
@@ -31,9 +33,10 @@ type Claimed struct {
 	Lease dblock.Lease
 	From  models.ExecutionStatus
 
-	span   trace.Span
-	began  bool
-	fenced bool
+	span    trace.Span
+	began   bool
+	fenced  bool
+	outcome string
 }
 
 func (cl *Claimed) bind(ctx context.Context) context.Context {
@@ -56,6 +59,12 @@ func (w *Worker) Claim(ctx context.Context, id uint) (*Claimed, ClaimResult, err
 
 // ClaimWith continues the trace of the message, or of the execution when the message has none.
 func (w *Worker) ClaimWith(ctx context.Context, id uint, traceparent string) (*Claimed, ClaimResult, error) {
+	cl, result, err := w.claimWith(ctx, id, traceparent)
+	recordClaim(ctx, cl, result, err)
+	return cl, result, err
+}
+
+func (w *Worker) claimWith(ctx context.Context, id uint, traceparent string) (*Claimed, ClaimResult, error) {
 	e, err := w.store.Get(ctx, id)
 	if errors.Is(err, execution.ErrNotFound) {
 		return nil, ClaimNone, nil
@@ -83,7 +92,11 @@ func (w *Worker) ClaimWith(ctx context.Context, id uint, traceparent string) (*C
 
 	owner := w.newOwner()
 	lockCtx, lockSpan := obs.Start(ctx, obs.SpanLockAcquire)
+	lockStarted := time.Now()
 	lease, ok, err := w.locks.Acquire(lockCtx, e.DatabaseID, e.ID, owner, w.cfg.LeaseTTL)
+	if err == nil {
+		metrics.Since(lockCtx, metrics.LockAcquire.WithLabelValues(lockResult(ok)), lockStarted)
+	}
 	lockSpan.End()
 	if err != nil {
 		return nil, ClaimNone, err

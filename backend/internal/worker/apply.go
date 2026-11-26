@@ -50,6 +50,7 @@ func (w *Worker) applyTx(ctx context.Context, db *sql.DB, cl *Claimed, batchNo i
 	base := logAttrs(e, obs.AttrAttempt, e.Attempts, obs.AttrBatchNo, batchNo)
 	with := func(extra ...any) []any { return append(slices.Clone(base), extra...) }
 
+	txStarted := time.Now()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -124,6 +125,7 @@ func (w *Worker) applyTx(ctx context.Context, db *sql.DB, cl *Claimed, batchNo i
 	}
 	cl.fenced = false
 	slog.InfoContext(ctx, obs.EventSQLCommit, with(obs.AttrStatus, "committed", obs.AttrRows, max(rows, 0))...)
+	recordCommit(ctx, cl, max(rows, 0), txStarted)
 	if h := w.Hooks.AfterCommit; h != nil {
 		if herr := h(e.ID, batchNo); herr != nil {
 			if errors.Is(herr, ErrInjectedCommitUnknown) {
