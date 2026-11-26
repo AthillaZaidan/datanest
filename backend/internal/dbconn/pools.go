@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/AthillaZaidan/datanest/backend/internal/apperr"
+	"github.com/AthillaZaidan/datanest/backend/internal/metrics"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -20,11 +21,12 @@ type Pools struct {
 	cipher  *Cipher
 	timeout time.Duration
 	entries map[uint]*sql.DB
+	names   map[uint]string
 	closed  bool
 }
 
 func NewPools(db *gorm.DB, c *Cipher, timeout time.Duration) *Pools {
-	return &Pools{db: db, cipher: c, timeout: timeout, entries: map[uint]*sql.DB{}}
+	return &Pools{db: db, cipher: c, timeout: timeout, entries: map[uint]*sql.DB{}, names: map[uint]string{}}
 }
 
 // openTarget starts from an empty parsed config, never a DSN containing credentials.
@@ -90,12 +92,14 @@ func (p *Pools) Get(ctx context.Context, id uint) (*sql.DB, error) {
 		return nil, ConnectionError(t, e)
 	}
 	p.entries[id] = pool
+	p.names[id] = m.Name
 	return pool, nil
 }
 func (p *Pools) Invalidate(id uint) {
 	p.mu.Lock()
 	pool := p.entries[id]
 	delete(p.entries, id)
+	delete(p.names, id)
 	p.mu.Unlock()
 	if pool != nil {
 		_ = pool.Close()
@@ -106,10 +110,29 @@ func (p *Pools) Close() {
 	p.closed = true
 	entries := p.entries
 	p.entries = map[uint]*sql.DB{}
+	p.names = map[uint]string{}
 	p.mu.Unlock()
 	for _, pool := range entries {
 		_ = pool.Close()
 	}
+}
+
+func (p *Pools) Stats() []metrics.PoolStats {
+	type open struct {
+		name string
+		db   *sql.DB
+	}
+	p.mu.Lock()
+	snapshot := make([]open, 0, len(p.entries))
+	for id, pool := range p.entries {
+		snapshot = append(snapshot, open{name: p.names[id], db: pool})
+	}
+	p.mu.Unlock()
+	out := make([]metrics.PoolStats, len(snapshot))
+	for i, o := range snapshot {
+		out[i] = metrics.PoolStats{Pool: "target", Database: o.name, Stats: o.db.Stats()}
+	}
+	return out
 }
 
 // Driver messages may contain credentials. Only expose fixed strings.
