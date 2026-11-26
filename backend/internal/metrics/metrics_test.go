@@ -251,3 +251,23 @@ func (s *safeBuffer) String() string {
 	defer s.mu.Unlock()
 	return s.b.String()
 }
+
+func TestHTTPDurationResolvesSlowRequestsUpToThirtySeconds(t *testing.T) {
+	ObserveHTTP(context.Background(), "GET", "/api/slow-bucket-check", 200, 7*time.Second)
+
+	var m dto.Metric
+	if err := HTTPDuration.WithLabelValues("GET", "/api/slow-bucket-check").(prometheus.Metric).Write(&m); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range m.GetHistogram().GetBucket() {
+		if b.GetUpperBound() == 10 && b.GetCumulativeCount() != 1 {
+			t.Errorf("a 7 s request is not under the 10 s bucket")
+		}
+		if b.GetUpperBound() == 5 && b.GetCumulativeCount() != 0 {
+			t.Errorf("a 7 s request was counted under 5 s")
+		}
+	}
+	if last := m.GetHistogram().GetBucket()[len(m.GetHistogram().GetBucket())-1].GetUpperBound(); last != 30 {
+		t.Errorf("largest bucket = %v s, want 30", last)
+	}
+}
