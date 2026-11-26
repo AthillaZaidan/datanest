@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -26,5 +27,15 @@ func TestParseRejectsABodyThatIsNotAnExecutionID(t *testing.T) {
 	msg, err := parse(deliveryWithBody("57"))
 	if err != nil || msg.ExecutionID != 57 {
 		t.Errorf("parse(57) = %+v, %v", msg, err)
+	}
+}
+
+func TestParseKeepsExecutionIDsWithinTheRangeOfUint(t *testing.T) {
+	largest := strconv.FormatUint(uint64(^uint(0)), 10)
+	if msg, err := parse(deliveryWithBody(largest)); err != nil || msg.ExecutionID != ^uint(0) {
+		t.Errorf("parse(%s) = %+v, %v; want the largest uint", largest, msg, err)
+	}
+	if _, err := parse(deliveryWithBody(largest + "0")); err == nil {
+		t.Errorf("an id beyond the range of uint was accepted")
 	}
 }
