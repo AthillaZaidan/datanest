@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -206,4 +208,46 @@ func gaugeValue(t *testing.T, c prometheus.Collector, name string) float64 {
 	}
 	t.Fatalf("%s not found", name)
 	return 0
+}
+
+func TestStartLogsATakenPortAndKeepsGoing(t *testing.T) {
+	l := httptest.NewServer(http.NotFoundHandler())
+	defer l.Close()
+	var buf safeBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	Start(ctx, strings.TrimPrefix(l.URL, "http://"))
+
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(buf.String(), "metrics.serve_failed") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no metrics.serve_failed log; got %q", buf.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestStartWithoutAnAddressDoesNothing(t *testing.T) {
+	Start(context.Background(), "")
+}
+
+type safeBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *safeBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *safeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
