@@ -12,9 +12,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/approval"
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
@@ -89,14 +87,7 @@ func run() error {
 		return errors.New("AMQP_URL is required to run the worker")
 	}
 
-	db, err := gorm.Open(postgres.Open(cfg.PlatformDSN), &gorm.Config{
-		Logger: logger.New(log.Default(), logger.Config{
-			SlowThreshold:             200 * time.Millisecond,
-			LogLevel:                  logger.Warn,
-			IgnoreRecordNotFoundError: true,
-			ParameterizedQueries:      true,
-		}),
-	})
+	db, err := dbconn.OpenPlatform(cfg.PlatformDSN, cfg.PlatformMaxOpenConns)
 	if err != nil {
 		return err
 	}

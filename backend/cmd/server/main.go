@@ -14,9 +14,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/admin"
 	"github.com/AthillaZaidan/datanest/backend/internal/approval"
@@ -73,14 +70,7 @@ func run() error {
 		_ = shutdownObs(flushCtx)
 	}()
 
-	db, err := gorm.Open(postgres.Open(cfg.PlatformDSN), &gorm.Config{
-		Logger: logger.New(log.Default(), logger.Config{
-			SlowThreshold:             200 * time.Millisecond,
-			LogLevel:                  logger.Warn,
-			IgnoreRecordNotFoundError: true,
-			ParameterizedQueries:      true, // never log query values (password hashes, etc.)
-		}),
-	})
+	db, err := dbconn.OpenPlatform(cfg.PlatformDSN, cfg.PlatformMaxOpenConns)
 	if err != nil {
 		return err
 	}
