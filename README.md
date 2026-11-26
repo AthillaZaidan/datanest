@@ -170,8 +170,8 @@ Backend membaca `backend/.env` lalu `.env` di root repo; variabel environment ya
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, atau `error`. Log berbentuk JSON di stdout. |
 | `TRACE_EXPORTER` | `console` | `console` menulis span ke stderr; `none` mematikan keluaran console (span tetap dikirim lewat OTLP bila `OTLP_ENDPOINT` diisi). |
 | `OTLP_ENDPOINT` | kosong | Bonus observability. Alamat OTLP/HTTP OpenTelemetry Collector, misalnya `http://localhost:4318`. Bila diisi, log dan span juga dikirim ke Collector; log JSON di stdout tetap ada. |
-| `METRICS_ADDR` | `:9100` | Bonus observability. Alamat endpoint Prometheus `/metrics` milik server, terpisah dari port API. `off` mematikannya. |
-| `WORKER_METRICS_ADDR` | `:9101` | Bonus observability. Alamat `/metrics` milik worker. Worker kedua di mesin yang sama harus memakai alamat lain (`:9102`); worker berhenti dengan error bila port sudah dipakai. |
+| `METRICS_ADDR` | `:9100` | Bonus observability. Alamat endpoint Prometheus `/metrics` milik server, terpisah dari port API. `off` mematikannya. Bila port sudah dipakai, server tetap jalan tanpa `/metrics` dan mencatat `metrics.serve_failed`. |
+| `WORKER_METRICS_ADDR` | `:9101` | Bonus observability. Alamat `/metrics` milik worker. Worker kedua di mesin yang sama perlu alamat lain (`:9102`) supaya ikut di-scrape; bila port sudah dipakai, worker tetap menjalankan job tanpa `/metrics` dan mencatat `metrics.serve_failed`. |
 | `TEST_PLATFORM_DSN`, `TEST_TARGET_DSN` | ke `test-pg` | Hanya untuk integration test. |
 | `TEST_AMQP_URL` | `amqp://datanest:datanest@localhost:15673/` | Hanya untuk integration test yang memakai RabbitMQ. |
 
@@ -924,11 +924,12 @@ Isi dashboard:
 | Logs and traces | Log server dan worker dari Loki (filter level); trace terbaru dari Tempo |
 
 **Contoh hasil nyata** (26 November 2026, server dan dua worker sungguhan, `otel-lgtm` di Docker, database demo terpisah
-`obsdemo_a` dan `obsdemo_b` berisi 400.000 row; nama host diganti `host`). Skenario: dua migration normal membuat table,
-tiga migration per batch (dua di `obsdemo_a`, sehingga yang kedua menunggu lock), satu migration yang gagal, satu rollback per
-batch, dan satu migration per batch berukuran 40.000 row.
+`obsdemo_a` dan `obsdemo_b` berisi 400.000 row; nama host diganti `host`). Putaran 1: dua migration normal membuat table,
+tiga migration per batch (dua di `obsdemo_a`, sehingga yang kedua menunggu lock), dan satu migration yang gagal. Putaran 2,
+setelah worker di-restart: satu rollback per batch dan dua migration normal. Putaran 3: satu migration per batch berukuran
+40.000 row (execution 10).
 
-Status target Prometheus dan beberapa query setelah skenario:
+Status target Prometheus dan query setelah putaran 1 (counter worker, sebelum restart):
 
 ```
 up{job=~"datanest.*"}
@@ -947,11 +948,19 @@ sum by (mode) (datanest_migration_batches_committed_total)
   {mode="normal"} 2   {mode="batch"} 48
 sum by (mode) (datanest_migration_rows_processed_total)
   {mode="batch"} 1200000
-histogram_quantile(0.95, sum by (le, mode) (rate(datanest_migration_duration_seconds_bucket[5m])))
-  {mode="normal"} 0.096   {mode="batch"} 2.36
 ```
 
-`/metrics` worker (format OpenMetrics) setelah migration per batch execution 10. Bucket yang berisi observasi membawa exemplar
+Setelah putaran 2 (jendela 5 menit; hasil `increase` dibulatkan):
+
+```
+histogram_quantile(0.95, sum by (le, mode) (rate(datanest_migration_duration_seconds_bucket[5m])))
+  {mode="normal"} 0.096   {mode="batch"} 2.36
+sum by (kind,mode,outcome) (increase(datanest_job_attempts_total[5m])) > 0
+  {kind="run", mode="normal", outcome="success"} 2
+  {kind="rollback", mode="batch", outcome="success"} 1
+```
+
+`/metrics` worker (format OpenMetrics) setelah putaran 3. Bucket yang berisi observasi membawa exemplar
 `trace_id`:
 
 ```
