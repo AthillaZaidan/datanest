@@ -239,3 +239,22 @@ func TestObservabilitySettingsAreValidated(t *testing.T) {
 		})
 	}
 }
+
+func TestPlatformPoolSize(t *testing.T) {
+	cfg, err := FromLookup(env(minimal()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PlatformMaxOpenConns != 20 {
+		t.Errorf("PlatformMaxOpenConns = %d, want 20", cfg.PlatformMaxOpenConns)
+	}
+	m := minimal()
+	m["PLATFORM_MAX_OPEN_CONNS"] = "0"
+	if _, err := FromLookup(env(m)); err == nil || !strings.Contains(err.Error(), "PLATFORM_MAX_OPEN_CONNS") {
+		t.Errorf("error = %v, want it to reject 0", err)
+	}
+	m["PLATFORM_MAX_OPEN_CONNS"] = "8"
+	if cfg, err := FromLookup(env(m)); err != nil || cfg.PlatformMaxOpenConns != 8 {
+		t.Errorf("PlatformMaxOpenConns = %v, %v; want 8", cfg, err)
+	}
+}
