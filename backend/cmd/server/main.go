@@ -26,6 +26,7 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/execution"
 	"github.com/AthillaZaidan/datanest/backend/internal/explorer"
 	"github.com/AthillaZaidan/datanest/backend/internal/httpapi"
+	"github.com/AthillaZaidan/datanest/backend/internal/metrics"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
 	"github.com/AthillaZaidan/datanest/backend/internal/obs"
@@ -86,6 +87,14 @@ func run() error {
 
 	pools := dbconn.NewPools(db, credentialCipher, cfg.Target.QueryTimeout)
 	defer pools.Close()
+	platformSQL, err := db.DB()
+	if err != nil {
+		return err
+	}
+	metrics.Registry.MustRegister(
+		metrics.NewExecutionCollector(db),
+		metrics.NewPoolCollector(metrics.SinglePool("platform", "platform", platformSQL), pools.Stats),
+	)
 	az := authz.New(db)
 	adminService := admin.New(db, sessions)
 	databaseService := dbconn.New(db, credentialCipher, pools, az, cfg.Target.QueryTimeout)
@@ -109,11 +118,18 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	errc := make(chan error, 1)
+	errc := make(chan error, 2)
 	go func() {
 		slog.Info("server.listening", "addr", srv.Addr)
 		errc <- srv.ListenAndServe()
 	}()
+	if cfg.MetricsAddr != "" {
+		go func() {
+			if err := metrics.Serve(ctx, cfg.MetricsAddr); err != nil {
+				errc <- err
+			}
+		}()
+	}
 
 	select {
 	case err := <-errc:
