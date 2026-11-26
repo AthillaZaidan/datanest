@@ -12,6 +12,7 @@ Platform manajemen database PostgreSQL: kontrol akses lewat group, database expl
 - [Test](#test)
 - [Reset dan troubleshooting](#reset-dan-troubleshooting)
 - [Konvensi](#konvensi)
+- [README per folder](#readme-per-folder)
 - [Keputusan desain](#keputusan-desain)
 
 ## Kebutuhan
@@ -243,6 +244,20 @@ docker compose down -v
 - Styling memakai utility class Tailwind CSS v4; class bersama didefinisikan di `frontend/src/components/ui.ts`.
 - Ikon berupa SVG inline (`components/icons.tsx`), jadi tidak ada ketergantungan CDN untuk ikon.
 - Tooling frontend memakai Bun, bukan npm. Lint: `cd frontend && bun run lint`.
+
+## README per folder
+
+Setiap folder utama punya README sendiri untuk detail yang hanya relevan di folder itu. README ini tetap menjadi rujukan utama
+untuk menjalankan aplikasi dan keputusan desain.
+
+| Folder | Isi README |
+| --- | --- |
+| [`backend/`](backend/README.md) | Binary `server`, `worker`, dan `seed`; tanggung jawab tiap paket `internal/`; alur satu migration; cara menjalankan test. |
+| [`frontend/`](frontend/README.md) | Perintah bun, struktur `src/`, daftar route dan aksesnya, polling status eksekusi. |
+| [`docker/`](docker/README.md) | Script inisialisasi Postgres, konfigurasi Prometheus dan Grafana, service compose dan port-nya. |
+| [`loadtest/`](loadtest/README.md) | Script k6, isi folder hasil, cara menjalankan, dan variabel yang bisa diatur. |
+| [`security/`](security/README.md) | Hasil scan CodeQL, status temuan, cara menjalankan ulang. |
+| [`.github/workflows/`](.github/workflows/README.md) | Workflow CodeQL: kapan berjalan, job, dan izin. |
 
 ## Keputusan desain
 
