@@ -1067,8 +1067,8 @@ Setiap request dan metrik job diberi tag `stage`, sehingga hasilnya dilaporkan p
 | `http_req_failed{type:submit}` | < 1% |
 | `job_success` | > 95% |
 
-Threshold tambahan berbentuk `count>=0` atau `max>=0` di script hanya dipakai agar k6 menampilkan angka per tahap; yang menentukan
-lulus atau gagal adalah lima threshold di atas.
+Script juga memasang threshold yang sama per tahap (misalnya `http_req_duration{type:api,stage:peak}`), sehingga k6 menyebut tahap
+mana yang melanggar. Threshold berbentuk `count>=0` atau `max>=0` hanya dipakai agar k6 menampilkan angka per tahap dan selalu lulus.
 
 **Menjalankan.** Butuh stack yang sudah menyala (database, RabbitMQ, server, dan dua worker seperti bagian 18), plus k6
 (`brew install k6`):
@@ -1078,10 +1078,17 @@ lulus atau gagal adalah lima threshold di atas.
 SUMMARY_DIR=loadtest/results/baru k6 run loadtest/stress.js
 ```
 
-`prepare.sh` membuat database `loadtest_a` sampai `loadtest_d` di `target-pg` bila belum ada. Ringkasan per tahap ditulis ke
-`summary.md` dan seluruh metrik ke `summary.json`. `QUICK=1` menjalankan versi 10 kali lebih singkat untuk memeriksa script.
+`prepare.sh` membuat database `loadtest_a` sampai `loadtest_d` di `target-pg` bila belum ada. Server harus sudah di-seed
+(`go run ./cmd/seed`), karena script login sebagai `demo-admin`, `developer`, dan `reviewer`. Tes menulis ratusan migration dan
+eksekusi ke database platform yang dipakai server, jadi jalankan dengan `PLATFORM_DSN` ke database platform terpisah (hasil di bawah
+memakai `datanest_loadtest` yang baru dibuat). Ringkasan per tahap ditulis ke `summary.md` dan seluruh metrik ke `summary.json`. `QUICK=1` menjalankan versi 10 kali lebih singkat untuk memeriksa script.
 Hasil di bawah diambil pada 26 November 2026 di satu MacBook Air: k6, server, dua worker, Postgres, dan RabbitMQ berjalan di mesin
 yang sama, dengan database platform terpisah yang baru dibuat (`datanest_loadtest`).
+
+**Ringkasan.** Run pertama yang ringan lulus semua threshold. Dua run berat berikutnya, sebelum dan sesudah perbaikan, sama-sama
+gagal di tahap peak dan stress (k6 keluar dengan kode 99). Pada run sesudah perbaikan, 3 dari 5 threshold keseluruhan gagal:
+p95 API, error rate API, dan `job_success`. Threshold pengajuan lulus. Jadi titik jenuh sistem di mesin ini ada di antara 3x dan 10x
+beban normal.
 
 **Hasil sesudah perbaikan** (`loadtest/results/3-after-fix`), dari sisi k6:
 
@@ -1108,9 +1115,9 @@ Dari sisi server (Prometheus, dihitung pada jendela tiap tahap):
 - **normal dan high (1x dan 3x).** Sistem jauh di bawah batas. p95 API 58 sampai 67 ms, tanpa error, semua job sukses,
   waktu tunggu antrean sekitar 10 ms, dan satu job selesai sekitar 1 detik setelah diajukan (0,6 sampai 0,8 detik menjalankan
   UPDATE, sisanya resolusi polling). Kedua threshold API lulus pada tahap ini.
-- **peak (10x).** Database target mulai menjadi batas. Durasi satu job naik dari 0,7 detik ke 6 sampai 7 detik, karena empat
-  UPDATE besar berjalan bersamaan di satu instance Postgres dan table makin penuh dead tuple (setelah tes, `loadtest_a` masih
-  menyimpan 751.000 dead tuple). Job datang lebih cepat daripada yang bisa diselesaikan (2 job/detik), sehingga antrean tumbuh
+- **peak (10x).** Database target mulai menjadi batas. Durasi satu job naik dari 0,7 detik ke 6 sampai 7 detik. Kemungkinan besar
+  penyebabnya beberapa UPDATE besar yang berjalan bersamaan di satu instance Postgres dan table yang makin penuh dead tuple. Keduanya
+  belum diukur selama tes; yang terukur hanya sisa 751.000 dead tuple di `loadtest_a` setelah tes selesai. Job datang lebih cepat daripada yang bisa diselesaikan (2 job/detik), sehingga antrean tumbuh
   sampai 29 dan waktu tunggu p95 naik ke 130 sampai 150 detik. Lock per database bekerja sesuai desain: hanya satu migration per
   database, sisanya tertolak lock atau ditahan (153 kali). p95 API naik ke 649 ms dan melewati threshold. Penyebabnya route
   explorer yang membaca database target yang sama (p95 isi table 1,9 detik di sisi server), sedangkan route yang hanya membaca
@@ -1155,10 +1162,23 @@ Dari sisi server (Prometheus, dihitung pada jendela tiap tahap):
 | Pemeriksaan session yang gagal karena database dianggap tidak login (401), sehingga SPA mengeluarkan pengguna. | 2.313 respons 401 di tahap stress. | Hanya session yang benar-benar tidak valid yang menjadi 401; gangguan database menjadi 500 dan session tetap ada. Commit yang sama. |
 
 Masing-masing diuji di `backend/internal/httpapi/auth_outage_integration_test.go` dan `backend/internal/dbconn/platform_integration_test.go`.
-Dampaknya pada beban yang sama: error API di tahap stress turun dari 37,9% ke 15,8% (sisanya timeout explorer). Respons 401 dan 500
-hilang. Pada tahap recovery, p95 API turun dari 5.024 ms ke 356 ms dan error dari 3,8% ke 0%. Job yang selesai di tahap recovery naik
-dari 3 ke 12. Total request yang dilayani naik dari 53.876 ke 118.960. Histogram latensi API juga dilebarkan sampai 30 detik, karena
-bucket lama berhenti di 2,5 detik dan menyembunyikan angka di tahap stress.
+Perbandingan kedua run perlu dibaca hati-hati. Masing-masing hanya satu kali jalan, dan database platform run sebelum perbaikan
+sudah berisi data run sebelumnya. Yang jelas disebabkan perbaikan: respons 401 dan 500 hilang (error API di tahap stress turun dari
+37,9% ke 15,8%; sisanya timeout explorer), dan koneksi platform turun dari 266 ke paling banyak 23. Pada tahap recovery, p95 API
+turun dari 5.024 ms ke 356 ms dan error dari 3,8% ke 0%.
+
+Tidak semua angka membaik. Di tahap peak, run sesudah perbaikan lebih buruk:
+
+- p95 API naik dari 248 ms ke 649 ms dan melewati threshold.
+- Queue wait p95 untuk database yang tersebar naik dari 65 ms ke 133 detik.
+- Penolakan lock naik dari 72 ke 153.
+- Durasi job di sisi server naik dari 2,4 ke 5,8 detik.
+
+Yang ikut melambat adalah durasi job dan route explorer, yang dua-duanya bergantung pada database target. Dugaannya, beban di
+database target berbeda antar-run, bukan efek batas pool; ini belum dibuktikan. Total request naik dari 53.876 ke 118.960, tetapi
+sebagian besar adalah polling job yang sebelumnya gagal lebih cepat, jadi tidak bisa dibaca sebagai throughput yang membaik.
+Histogram latensi API juga dilebarkan sampai 30 detik, karena bucket lama berhenti di 2,5 detik dan menyembunyikan angka di tahap
+stress.
 
 Run pertama yang lebih ringan (`loadtest/results/1-light`: job 20.000 row, puncak 10x tanpa tahap 30x) lulus semua threshold,
 dengan p95 API 12 sampai 20 ms dan 120 dari 120 job sukses di puncak. Dari situ beban dinaikkan sampai titik jenuhnya terlihat.
