@@ -20,6 +20,7 @@ import (
 	"github.com/AthillaZaidan/datanest/backend/internal/authz"
 	"github.com/AthillaZaidan/datanest/backend/internal/config"
 	"github.com/AthillaZaidan/datanest/backend/internal/dbconn"
+	"github.com/AthillaZaidan/datanest/backend/internal/metrics"
 	"github.com/AthillaZaidan/datanest/backend/internal/migration"
 	"github.com/AthillaZaidan/datanest/backend/internal/models"
 	"github.com/AthillaZaidan/datanest/backend/internal/obs"
@@ -97,6 +98,11 @@ func run() error {
 	}
 	pools := dbconn.NewPools(db, cipher, cfg.Target.QueryTimeout)
 	defer pools.Close()
+	platformSQL, err := db.DB()
+	if err != nil {
+		return err
+	}
+	metrics.Registry.MustRegister(metrics.NewPoolCollector(metrics.SinglePool("platform", "platform", platformSQL), pools.Stats))
 
 	w := newWorker(db, pools, cfg)
 	publisher := queue.NewPublisher(cfg.AMQPURL, queue.JobsQueue)
@@ -106,6 +112,21 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	metricsErr := make(chan error, 1)
+	if cfg.Worker.MetricsAddr != "" {
+		go func() {
+			if err := metrics.Serve(ctx, cfg.Worker.MetricsAddr); err != nil {
+				metricsErr <- fmt.Errorf("metrics on %s: %w", cfg.Worker.MetricsAddr, err)
+				stop()
+			}
+		}()
+	}
 	slog.Info("worker.started", "slots", cfg.Worker.Concurrency, "queue", queue.JobsQueue)
-	return w.Serve(ctx, cfg.AMQPURL, cfg.Worker.SweepInterval)
+	err = w.Serve(ctx, cfg.AMQPURL, cfg.Worker.SweepInterval)
+	select {
+	case merr := <-metricsErr:
+		return merr
+	default:
+		return err
+	}
 }
