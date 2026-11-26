@@ -1170,3 +1170,68 @@ menjadi lebih besar daripada seharusnya. Kesimpulan ini diambil dari log satu ru
 
 **Batasan.** Semua komponen berbagi satu laptop, termasuk k6 sendiri, sehingga angka absolutnya hanya berlaku untuk mesin ini.
 Keempat database target berada di satu container Postgres. Polling 0,5 detik membuat k6 ikut menambah beban saat job menumpuk.
+
+### 20. Bonus: SAST dengan CodeQL
+
+**Aktivasi.** `.github/workflows/codeql.yml` menjalankan CodeQL di GitHub Actions setiap push ke `main`, setiap pull request ke
+`main`, setiap Senin, dan bisa dipicu manual. Ada dua job: `go` (build manual `go build ./...` di `backend/`, karena modul Go
+tidak berada di root repo) dan `javascript-typescript` (tanpa build). Suite yang dipakai adalah `security-extended`, yaitu query
+keamanan bawaan ditambah query dengan presisi lebih rendah. Hasilnya muncul di tab **Security, Code scanning** repository.
+
+Sebelum workflow di-push, suite yang sama dijalankan lokal (CodeQL CLI 2.27.6, `codeql/go-queries` 1.6.16,
+`codeql/javascript-queries` 2.5.2) pada checkout bersih tanpa `node_modules` dan `frontend/dist`, sehingga isinya sama dengan yang
+dilihat runner GitHub. Daftar lengkap temuan ada di `security/codeql/scan-1-before-fix.md` dan `security/codeql/scan-2-after-fix.md`.
+
+**Cakupan.** Go: 83 file yang ikut `go build ./...`, yaitu seluruh kode non-test di `backend/cmd` dan `backend/internal`. File
+`_test.go` tidak dianalisis karena tidak ikut di-build. JavaScript/TypeScript: 47 dari 47 file (`frontend/src`, konfigurasi Vite, dan
+`loadtest/stress.js`). File workflow GitHub Actions: 1 dari 1.
+
+**Hasil scan pertama: 12 temuan di Go, 0 di JavaScript/TypeScript.**
+
+| # | Rule | Severity | Lokasi | Nilai dari pengguna | Potensi dampak | Keputusan |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `go/incorrect-integer-conversion` | warning, 8.1 | `backend/internal/httpapi/helpers.go:28` (`pathID`) | ID di path URL | Angka di-parse 64-bit lalu dikonversi ke `uint`. Pada build 32-bit, ID di atas 4.294.967.295 akan terpotong menjadi ID lain, sehingga request menyentuh resource yang berbeda dari yang diminta (otorisasi tetap diperiksa untuk resource itu). | **Diperbaiki.** Di-parse dengan `strconv.IntSize`, sehingga nilai di luar jangkauan `uint` ditolak (404). |
+| 2 | `go/incorrect-integer-conversion` | warning, 8.1 | `backend/internal/queue/message.go:50` (`parse`) | Body pesan RabbitMQ | Sama: execution ID dari pesan bisa terpotong pada build 32-bit sehingga worker memproses eksekusi lain. | **Diperbaiki** dengan cara yang sama; pesan dengan ID di luar jangkauan ditolak. |
+| 3 | `go/log-injection` | error, 6.1 | `backend/internal/auth/auth.go:58` | Username saat login gagal | Log forging bila nilai berisi baris baru. | **False positive.** Lihat penjelasan di bawah. |
+| 4 | `go/log-injection` | error, 6.1 | `backend/internal/auth/auth.go:189` | Method dan path request yang ditolak | sama | **False positive** |
+| 5 | `go/log-injection` | error, 6.1 | `backend/internal/httpapi/middleware.go:47` | Method dan path setiap request (`http.request`) | sama | **False positive** |
+| 6 | `go/log-injection` | error, 6.1 | `backend/internal/httpapi/middleware.go:62` | Method dan path saat panic | sama | **False positive** |
+| 7 | `go/log-injection` | error, 6.1 | `backend/internal/httpapi/router.go:172` | Method dan path pada `authz.denied` | sama | **False positive** |
+| 8 | `go/log-injection` | error, 6.1 | `backend/internal/admin/service.go:375` | ID group dan user pada `leader.changed` | sama | **False positive** |
+| 9 | `go/log-injection` | error, 6.1 | `backend/internal/admin/service.go:461` | Level grant pada `grant.changed` | sama | **False positive** |
+| 10 | `go/log-injection` | error, 6.1 | `backend/internal/explorer/querylog.go:38` | Query explorer (schema, table, halaman) saat gagal | sama | **False positive** |
+| 11 | `go/log-injection` | error, 6.1 | `backend/internal/explorer/querylog.go:41` | Query explorer saat berhasil | sama | **False positive** |
+| 12 | `go/log-injection` | error, 6.1 | `backend/internal/migration/submit.go:83` | Jenis pengajuan pada `execution.requested` | sama | **False positive** |
+
+**Kenapa `go/log-injection` dinilai false positive.** Rule ini melindungi dari log forging: penyerang menyisipkan baris baru agar
+log palsu terlihat seperti entri asli. Semua log di aplikasi ini ditulis lewat `log/slog` dengan handler JSON (bagian 17). Setiap nilai
+menjadi string JSON, dan karakter seperti `\n`, `\r`, atau escape terminal di-escape, sehingga satu panggilan log selalu menghasilkan
+tepat satu baris JSON. Jalur ke Collector (bagian 18) mengirim atribut terstruktur OTLP, bukan teks. CodeQL tidak memodelkan handler
+JSON `slog` sebagai sanitizer, sehingga tetap menandainya. Test `TestUserInputCannotForgeAnotherLogLine`
+(`backend/internal/obs/forging_test.go`) membuktikannya: username berisi baris baru dan objek JSON palsu tetap tercatat sebagai satu
+nilai string di satu baris. Nilai-nilai ini memang sengaja dicatat untuk audit (siapa mencoba login, path apa yang ditolak). Data
+sensitif tetap dimasking (password, session, token, literal SQL). Risiko yang diterima: log memuat teks bebas dari pengguna yang
+sudah login, dan pembaca log harus memperlakukannya sebagai data, bukan perintah.
+
+**Perbaikan dan scan ulang.** Temuan 1 dan 2 diperbaiki di commit `6a836a0` ("fix: parse ids with the platform uint size..."),
+dengan test `TestPathIDKeepsIDsWithinTheRangeOfUint` dan `TestParseKeepsExecutionIDsWithinTheRangeOfUint`. Scan ulang di commit
+`d8c9abf` menghasilkan 10 temuan, semuanya `go/log-injection` dengan keputusan di atas. Temuan integer conversion tidak muncul lagi.
+JavaScript/TypeScript dan file workflow tetap 0 temuan. Setelah workflow berjalan di GitHub, kesepuluh alert itu perlu ditandai
+*Dismiss, False positive* di tab Code scanning dengan rujukan ke bagian ini, supaya tab Security hanya berisi temuan yang belum
+diputuskan.
+
+**Yang tidak dijamin oleh hasil ini.** Hasil bersih tidak berarti aplikasi pasti aman. Taint tracking CodeQL berhenti di database.
+SQL migration yang dijalankan worker berasal dari baris di database platform, bukan langsung dari request, sehingga fitur yang memang
+menjalankan SQL pengguna tidak ditandai `go/sql-injection`. Fitur itu dibatasi oleh desain, bukan oleh CodeQL: hanya pemegang akses
+EDIT yang bisa mengajukan, setiap pengajuan butuh persetujuan semua leader, `sqlguard` menolak perintah transaction control, dan
+koneksi demo memakai role `platform_app` (`NOSUPERUSER`); pengujian koneksi memberi peringatan bila role-nya superuser. Identifier di explorer dibangun dengan `pgx.Identifier`, nilainya lewat
+parameter. File test tidak dianalisis.
+
+Menjalankan ulang secara lokal (setelah `brew install --cask codeql` dan `codeql pack download codeql/go-queries codeql/javascript-queries`):
+
+```bash
+codeql database create /tmp/db-go --language=go --source-root=backend --command="go build ./..."
+codeql database analyze /tmp/db-go codeql/go-queries:codeql-suites/go-security-extended.qls --format=sarif-latest --output=go.sarif
+codeql database create /tmp/db-js --language=javascript-typescript --source-root=. --build-mode=none
+codeql database analyze /tmp/db-js codeql/javascript-queries:codeql-suites/javascript-security-extended.qls --format=sarif-latest --output=js.sarif
+```
