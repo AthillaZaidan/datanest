@@ -147,6 +147,7 @@ Backend membaca `backend/.env` lalu `.env` di root repo; variabel environment ya
 | `ALLOWED_ORIGIN` | `http://localhost:8080` | Satu-satunya origin yang boleh mengirim request pengubah data. Harus sama persis dengan alamat yang dibuka di browser. |
 | `COOKIE_SECURE` | `false` | `true` hanya bila disajikan lewat HTTPS. |
 | `PLATFORM_DSN` | `postgres://datanest:datanest@localhost:15432/datanest_platform?sslmode=disable` | Database platform (`platform-pg`). Wajib. |
+| `PLATFORM_MAX_OPEN_CONNS` | `20` | Batas koneksi ke database platform per proses (server dan tiap worker). Jumlah semua proses harus di bawah `max_connections` Postgres (100). Permintaan berlebih menunggu di pool, bukan gagal (lihat bagian 19). |
 | `ADMIN_USERNAME` | `admin` | Username Platform Admin pertama, dibuat hanya bila belum ada admin sama sekali. |
 | `ADMIN_PASSWORD` | kosong | Wajib diisi bila belum ada admin (tidak perlu jika seed sudah dijalankan). Admin yang sudah ada tidak pernah di-reset dari nilai ini. |
 | `CREDENTIALS_KEY` | kosong | Kunci AES-256 (32 byte, base64) untuk mengenkripsi password koneksi database target. Wajib. Jika diganti, password koneksi yang tersimpan tidak bisa dibuka lagi: isi ulang di halaman Koneksi database, atau jalankan seed lagi untuk koneksi demo. |
