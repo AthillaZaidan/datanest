@@ -65,7 +65,29 @@ services:
       timeout: 5s
       retries: 10
 
+  lgtm:
+    image: grafana/otel-lgtm:0.41.1
+    profiles: ["observability"]
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+      - "${OTLP_GRPC_PORT:-4317}:4317"
+      - "${OTLP_HTTP_PORT:-4318}:4318"
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./docker/observability/prometheus.yaml:/otel-lgtm/prometheus.yaml:ro
+      - ./docker/observability/grafana-dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/datanest.yaml:ro
+      - ./docker/observability/dashboards:/otel-lgtm/datanest-dashboards:ro
+      - lgtm-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
 volumes:
   platform-data:
   target-data:
   rabbitmq-data:
+  lgtm-data:
