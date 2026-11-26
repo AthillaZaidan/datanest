@@ -1236,9 +1236,20 @@ sudah login, dan pembaca log harus memperlakukannya sebagai data, bukan perintah
 **Perbaikan dan scan ulang.** Temuan 1 dan 2 diperbaiki di commit `6a836a0` ("fix: parse ids with the platform uint size..."),
 dengan test `TestPathIDKeepsIDsWithinTheRangeOfUint` dan `TestParseKeepsExecutionIDsWithinTheRangeOfUint`. Scan ulang di commit
 `d8c9abf` menghasilkan 10 temuan, semuanya `go/log-injection` dengan keputusan di atas. Temuan integer conversion tidak muncul lagi.
-JavaScript/TypeScript dan file workflow tetap 0 temuan. Setelah workflow berjalan di GitHub, kesepuluh alert itu perlu ditandai
-*Dismiss, False positive* di tab Code scanning dengan rujukan ke bagian ini, supaya tab Security hanya berisi temuan yang belum
-diputuskan.
+JavaScript/TypeScript dan file workflow tetap 0 temuan.
+
+**Hasil di GitHub.** Workflow sudah ada di `main` (commit `175d1fb`), tetapi run pertamanya
+([45823076583](https://github.com/AthillaZaidan/datanest/actions/runs/45823076583)) tidak dimulai. GitHub menolak kedua job dengan
+pesan "The job was not started because your account is locked due to a billing issue". Ini kunci di akun pemilik repository, bukan
+kesalahan workflow. Karena itu hasil scan ulang lokal di atas diunggah ke Code scanning lewat API (`POST /code-scanning/sarifs`,
+kategori `codeql-cli-local/language:go/` dan `codeql-cli-local/language:javascript-typescript/`, untuk commit `175d1fb`). Isi
+kode di commit itu sama dengan commit yang di-scan; sesudahnya hanya dokumentasi yang berubah. Path lokal sudah dihapus dari SARIF
+sebelum diunggah. Keduanya diproses tanpa error, dan tab
+[Security, Code scanning](https://github.com/AthillaZaidan/datanest/security/code-scanning) menampilkan 10 alert terbuka
+`go/log-injection` (#1 sampai #10, severity medium), sama dengan tabel di atas, dan 0 alert JavaScript/TypeScript. Setelah kunci
+akun dibuka, jalankan ulang workflow dari tab Actions (**CodeQL, Run workflow**) atau dengan `gh run rerun 45823076583`.
+Kesepuluh alert lalu perlu ditandai *Dismiss, False positive* dengan rujukan ke bagian ini, supaya tab Security hanya berisi temuan
+yang belum diputuskan.
 
 **Yang tidak dijamin oleh hasil ini.** Hasil bersih tidak berarti aplikasi pasti aman. Taint tracking CodeQL berhenti di database.
 SQL migration yang dijalankan worker berasal dari baris di database platform, bukan langsung dari request, sehingga fitur yang memang
