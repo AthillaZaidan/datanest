@@ -42,7 +42,7 @@ func declare(ch *amqp.Channel, queue string) error {
 }
 
 func parse(d amqp.Delivery) (Message, error) {
-	id, err := strconv.ParseUint(string(d.Body), 10, 64)
+	id, err := strconv.ParseUint(string(d.Body), 10, strconv.IntSize)
 	if err != nil {
 		return Message{}, fmt.Errorf("body %q is not an execution id: %w", d.Body, err)
 	}

@@ -20,7 +20,7 @@ func currentUser(c *gin.Context) (uint, bool) {
 
 // pathID parses a numeric path parameter, or writes 404 and returns false.
 func pathID(c *gin.Context, name string) (uint, bool) {
-	id, err := strconv.ParseUint(c.Param(name), 10, 64)
+	id, err := strconv.ParseUint(c.Param(name), 10, strconv.IntSize)
 	if err != nil || id == 0 {
 		RespondError(c, apperr.ErrNotFound)
 		return 0, false
