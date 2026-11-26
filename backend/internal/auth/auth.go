@@ -72,6 +72,9 @@ func (s *Service) Login(c *gin.Context) {
 func (s *Service) Verify(username, password string) (models.User, error) {
 	var u models.User
 	err := s.DB.Where("username = ?", username).First(&u).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return models.User{}, apperr.ErrInternal
+	}
 	hash := []byte(u.PasswordHash)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		hash = dummyHash
@@ -114,8 +117,11 @@ func (s *Service) Me(c *gin.Context) {
 		return
 	}
 	var u models.User
-	if err := s.DB.First(&u, id).Error; err != nil {
+	if err := s.DB.First(&u, id).Error; errors.Is(err, gorm.ErrRecordNotFound) {
 		respond(c, apperr.ErrUnauthenticated)
+		return
+	} else if err != nil {
+		respond(c, apperr.ErrInternal)
 		return
 	}
 	admin, err := s.IsAdmin(id)
@@ -128,9 +134,14 @@ func (s *Service) Me(c *gin.Context) {
 }
 
 func (s *Service) RequireAuth(c *gin.Context) {
-	sess, ok := s.Authenticate(c)
-	if !ok {
+	sess, err := s.Authenticate(c)
+	if errors.Is(err, session.ErrInvalid) {
 		respond(c, apperr.ErrUnauthenticated)
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "auth.session_check_failed", obs.AttrError, err.Error())
+		respond(c, apperr.ErrInternal)
 		return
 	}
 	if stateChanging(c.Request.Method) && !constantEqual(c.GetHeader("X-CSRF-Token"), sess.CSRFToken) {
@@ -141,21 +152,21 @@ func (s *Service) RequireAuth(c *gin.Context) {
 }
 
 // Authenticate validates the session cookie, sends a rotated identifier when due, and stores the user in the context.
-func (s *Service) Authenticate(c *gin.Context) (*session.Session, bool) {
+func (s *Service) Authenticate(c *gin.Context) (*session.Session, error) {
 	raw, err := c.Cookie(CookieName)
 	if err != nil {
-		return nil, false
+		return nil, session.ErrInvalid
 	}
 	sess, replacement, err := s.Sessions.Validate(raw)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	if replacement != "" {
 		s.setCookie(c, replacement)
 	}
 	reqctx.SetUserID(c, sess.UserID)
 	c.Set("datanest.csrf", sess.CSRFToken)
-	return sess, true
+	return sess, nil
 }
 
 // CSRFMatches compares a submitted token with the session's in constant time.
