@@ -69,6 +69,7 @@ type View struct {
 	Permissions          approval.Permissions `json:"permissions"`
 	RequestedBy          string               `json:"requestedBy"`
 	CreatedAt            time.Time            `json:"createdAt"`
+	QueuedAt             *time.Time           `json:"queuedAt"`
 	StartedAt            *time.Time           `json:"startedAt"`
 	FinishedAt           *time.Time           `json:"finishedAt"`
 }
@@ -111,7 +112,7 @@ func toView(e *models.MigrationExecution, attempts []models.ExecutionAttempt) *V
 		ErrorCode: e.ErrorCode, ErrorMessage: e.ErrorMessage,
 		Approvers: []ApproverView{}, BlockedGroups: []approval.GroupRef{},
 		RequestedBy: e.RequestedByUsername,
-		CreatedAt:   e.CreatedAt, StartedAt: e.StartedAt, FinishedAt: e.FinishedAt,
+		CreatedAt:   e.CreatedAt, QueuedAt: e.QueuedAt, StartedAt: e.StartedAt, FinishedAt: e.FinishedAt,
 		Attempts: make([]AttemptView, 0, len(attempts)),
 	}
 	if e.SQLExecuted != "" {
