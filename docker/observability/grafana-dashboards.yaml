@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: DataNest
+    folder: DataNest
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /otel-lgtm/datanest-dashboards
+      foldersFromFilesStructure: false
