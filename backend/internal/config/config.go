@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -23,6 +25,8 @@ type Config struct {
 
 	LogLevel      string
 	TraceExporter string
+	OTLPEndpoint  string
+	MetricsAddr   string
 
 	// Seed the first Platform Admin when none exists.
 	AdminUsername string
@@ -43,6 +47,7 @@ type WorkerConfig struct {
 	HeartbeatInterval time.Duration
 	SweepInterval     time.Duration
 	RepublishAfter    time.Duration
+	MetricsAddr       string
 }
 
 // Invariant: grace < rotation < idle < absolute.
@@ -78,6 +83,8 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 		AMQPURL:       r.str("AMQP_URL", ""),
 		LogLevel:      r.str("LOG_LEVEL", "info"),
 		TraceExporter: r.str("TRACE_EXPORTER", "console"),
+		OTLPEndpoint:  r.str("OTLP_ENDPOINT", ""),
+		MetricsAddr:   r.listenAddr("METRICS_ADDR", ":9100"),
 		AdminUsername: r.str("ADMIN_USERNAME", ""),
 		AdminPassword: r.str("ADMIN_PASSWORD", ""),
 		Session: SessionConfig{
@@ -101,6 +108,7 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 		HeartbeatInterval: r.duration("WORKER_HEARTBEAT", 10*time.Second),
 		SweepInterval:     r.duration("WORKER_SWEEP_INTERVAL", 5*time.Second),
 		RepublishAfter:    r.duration("WORKER_REPUBLISH_AFTER", 30*time.Second),
+		MetricsAddr:       r.listenAddr("WORKER_METRICS_ADDR", ":9101"),
 	}
 	cfg.CredentialsKey = r.credentialsKey("CREDENTIALS_KEY")
 
@@ -116,6 +124,12 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 	case "console", "none":
 	default:
 		r.fail("TRACE_EXPORTER must be console or none, got %q", cfg.TraceExporter)
+	}
+	if cfg.OTLPEndpoint != "" {
+		u, err := url.Parse(cfg.OTLPEndpoint)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+			r.fail("OTLP_ENDPOINT must be an http(s) URL without credentials, such as http://localhost:4318")
+		}
 	}
 	s := cfg.Session
 	if !(s.GracePeriod < s.RotationInterval && s.RotationInterval < s.IdleTimeout && s.IdleTimeout < s.AbsoluteTimeout) {
@@ -185,6 +199,18 @@ func (r *reader) duration(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+func (r *reader) listenAddr(key, def string) string {
+	v := r.str(key, def)
+	if v == "off" {
+		return ""
+	}
+	if _, port, err := net.SplitHostPort(v); err != nil || port == "" {
+		r.fail("%s must be host:port or :port (or off), got %q", key, v)
+		return def
+	}
+	return v
 }
 
 func (r *reader) credentialsKey(key string) []byte {
