@@ -37,9 +37,8 @@ func main() {
 // newWorker builds the worker with B's revalidation hook: the request is re-checked
 // (version rules, frozen SQL) under the database lock before it runs.
 func newWorker(db *gorm.DB, targets dbconn.TargetDBProvider, cfg *config.Config) *worker.Worker {
-	host, _ := os.Hostname()
 	w := worker.New(db, targets, worker.Config{
-		WorkerID:         fmt.Sprintf("%s-%d", host, os.Getpid()),
+		WorkerID:         instanceID(),
 		Concurrency:      cfg.Worker.Concurrency,
 		MaxAttempts:      cfg.Worker.MaxAttempts,
 		LeaseTTL:         cfg.Worker.LeaseTTL,
@@ -60,6 +59,11 @@ func newWorker(db *gorm.DB, targets dbconn.TargetDBProvider, cfg *config.Config)
 	return w
 }
 
+func instanceID() string {
+	host, _ := os.Hostname()
+	return fmt.Sprintf("%s-%d", host, os.Getpid())
+}
+
 func run() error {
 	for _, f := range []string{".env", "../.env"} {
 		_ = godotenv.Load(f)
@@ -69,11 +73,18 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	shutdownObs, err := obs.Setup(cfg.LogLevel, cfg.TraceExporter, os.Stdout, os.Stderr)
+	shutdownObs, err := obs.Setup(obs.Options{
+		Level: cfg.LogLevel, TraceExporter: cfg.TraceExporter, OTLPEndpoint: cfg.OTLPEndpoint,
+		Service: "datanest-worker", Instance: instanceID(), LogOut: os.Stdout, TraceOut: os.Stderr,
+	})
 	if err != nil {
 		return err
 	}
-	defer shutdownObs(context.Background())
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownObs(flushCtx)
+	}()
 	if cfg.AMQPURL == "" {
 		return errors.New("AMQP_URL is required to run the worker")
 	}

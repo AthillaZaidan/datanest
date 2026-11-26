@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
@@ -40,6 +41,11 @@ func main() {
 	}
 }
 
+func instanceID() string {
+	host, _ := os.Hostname()
+	return fmt.Sprintf("%s-%d", host, os.Getpid())
+}
+
 func run() error {
 	// .env is optional; real environment variables take precedence. Load each file on its
 	// own: godotenv stops at the first missing file.
@@ -54,11 +60,18 @@ func run() error {
 	if os.Getenv(gin.EnvGinMode) == "" {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	shutdownObs, err := obs.Setup(cfg.LogLevel, cfg.TraceExporter, os.Stdout, os.Stderr)
+	shutdownObs, err := obs.Setup(obs.Options{
+		Level: cfg.LogLevel, TraceExporter: cfg.TraceExporter, OTLPEndpoint: cfg.OTLPEndpoint,
+		Service: "datanest-server", Instance: instanceID(), LogOut: os.Stdout, TraceOut: os.Stderr,
+	})
 	if err != nil {
 		return err
 	}
-	defer shutdownObs(context.Background())
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownObs(flushCtx)
+	}()
 
 	db, err := gorm.Open(postgres.Open(cfg.PlatformDSN), &gorm.Config{
 		Logger: logger.New(log.Default(), logger.Config{
