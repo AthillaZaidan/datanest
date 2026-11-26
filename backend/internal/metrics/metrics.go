@@ -19,6 +19,7 @@ var (
 	durationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300}
 	waitBuckets     = []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300}
 	quickBuckets    = []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5}
+	httpBuckets     = []float64{0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
 )
 
 var Registry = prometheus.NewRegistry()
@@ -81,7 +82,7 @@ var (
 	HTTPDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace, Name: "http_request_duration_seconds",
 		Help:    "API request duration by method and route template.",
-		Buckets: quickBuckets,
+		Buckets: httpBuckets,
 	}, []string{"method", "route"})
 )
 
