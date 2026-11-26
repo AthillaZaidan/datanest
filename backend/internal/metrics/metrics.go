@@ -112,6 +112,17 @@ func Handler() http.Handler {
 	return promhttp.HandlerFor(Registry, promhttp.HandlerOpts{EnableOpenMetrics: true, Registry: Registry})
 }
 
+func Start(ctx context.Context, addr string) {
+	if addr == "" {
+		return
+	}
+	go func() {
+		if err := Serve(ctx, addr); err != nil {
+			slog.Error("metrics.serve_failed", "addr", addr, "error", err.Error())
+		}
+	}()
+}
+
 func Serve(ctx context.Context, addr string) error {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", Handler())
