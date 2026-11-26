@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AthillaZaidan/datanest/backend/internal/metrics"
+	"github.com/AthillaZaidan/datanest/backend/internal/models"
 )
 
 const (
@@ -70,4 +71,33 @@ func trackInProgress(cl *Claimed) func() {
 	g := metrics.JobsInProgress.WithLabelValues(jobLabels(cl)...)
 	g.Inc()
 	return g.Dec
+}
+
+var (
+	metricKinds     = []models.ExecutionKind{models.ExecKindRun, models.ExecKindForward, models.ExecKindRollback}
+	metricModes     = []models.ExecutionMode{models.ExecModeNormal, models.ExecModeBatch}
+	attemptOutcomes = []string{outcomeSuccess, string(models.ExecFailed), string(models.ExecPartial), outcomeUncertain, outcomeRetry, outcomeLockLost}
+)
+
+func InitMetrics() {
+	for _, outcome := range claimOutcomes {
+		metrics.JobClaims.WithLabelValues(outcome)
+	}
+	metrics.JobClaims.WithLabelValues("error")
+	metrics.LockAcquire.WithLabelValues(lockResult(true))
+	metrics.LockAcquire.WithLabelValues(lockResult(false))
+	for _, k := range metricKinds {
+		for _, m := range metricModes {
+			kind, mode := string(k), string(m)
+			metrics.JobsInProgress.WithLabelValues(kind, mode)
+			metrics.QueueWait.WithLabelValues(kind, mode)
+			metrics.BatchDuration.WithLabelValues(kind, mode)
+			metrics.BatchesCommitted.WithLabelValues(kind, mode)
+			metrics.RowsProcessed.WithLabelValues(kind, mode)
+			for _, outcome := range attemptOutcomes {
+				metrics.JobAttempts.WithLabelValues(kind, mode, outcome)
+				metrics.MigrationDuration.WithLabelValues(kind, mode, outcome)
+			}
+		}
+	}
 }

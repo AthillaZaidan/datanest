@@ -113,6 +113,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	worker.InitMetrics()
 	metrics.Registry.MustRegister(metrics.NewPoolCollector(metrics.SinglePool("platform", "platform", platformSQL), pools.Stats))
 
 	w := newWorker(db, pools, cfg)
