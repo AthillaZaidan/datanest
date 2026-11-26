@@ -5,11 +5,13 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	collogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
@@ -215,3 +217,39 @@ func (h captureHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return h
 }
 func (h captureHandler) WithGroup(string) slog.Handler { return h }
+
+func TestAnUnreachableCollectorNeitherBlocksLoggingNorShutdown(t *testing.T) {
+	restoreGlobals(t)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := "http://" + l.Addr().String()
+	l.Close()
+	var stdout bytes.Buffer
+
+	shutdown, err := Setup(Options{Level: "info", TraceExporter: "none", OTLPEndpoint: closed, Service: "datanest-server", LogOut: &stdout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	ctx, span := Start(context.Background(), SpanAPIApprove)
+	for range 100 {
+		slog.InfoContext(ctx, EventExecutionApproved, AttrStatus, "approved")
+	}
+	span.End()
+	if took := time.Since(started); took > time.Second {
+		t.Errorf("logging with the collector down took %v", took)
+	}
+
+	flushCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	started = time.Now()
+	_ = shutdown(flushCtx)
+	if took := time.Since(started); took > 3*time.Second {
+		t.Errorf("shutdown took %v, want it bounded by its context", took)
+	}
+	if got := strings.Count(stdout.String(), EventExecutionApproved); got != 100 {
+		t.Errorf("stdout lines = %d, want 100 while the collector is down", got)
+	}
+}
