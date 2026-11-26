@@ -136,7 +136,7 @@ func TestWorkerDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := WorkerConfig{Concurrency: 4, MaxAttempts: 3, LeaseTTL: 30 * time.Second, HeartbeatInterval: 10 * time.Second, SweepInterval: 5 * time.Second, RepublishAfter: 30 * time.Second}
+	want := WorkerConfig{Concurrency: 4, MaxAttempts: 3, LeaseTTL: 30 * time.Second, HeartbeatInterval: 10 * time.Second, SweepInterval: 5 * time.Second, RepublishAfter: 30 * time.Second, MetricsAddr: ":9101"}
 	if cfg.Worker != want {
 		t.Errorf("worker config = %+v, want %+v", cfg.Worker, want)
 	}
@@ -177,5 +177,65 @@ func TestWorkerSettingsAreRead(t *testing.T) {
 	}
 	if cfg.Worker.Concurrency != 9 || cfg.Worker.LeaseTTL != time.Minute || cfg.Worker.HeartbeatInterval != 20*time.Second {
 		t.Errorf("worker config = %+v", cfg.Worker)
+	}
+}
+
+func TestObservabilityDefaults(t *testing.T) {
+	cfg, err := FromLookup(env(minimal()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MetricsAddr != ":9100" || cfg.Worker.MetricsAddr != ":9101" {
+		t.Errorf("metrics addresses = %q, %q; want :9100 and :9101", cfg.MetricsAddr, cfg.Worker.MetricsAddr)
+	}
+	if cfg.OTLPEndpoint != "" || cfg.TraceExporter != "console" {
+		t.Errorf("OTLPEndpoint = %q, TraceExporter = %q; want no OTLP export and console spans by default", cfg.OTLPEndpoint, cfg.TraceExporter)
+	}
+}
+
+func TestObservabilitySettingsAreRead(t *testing.T) {
+	m := minimal()
+	m["METRICS_ADDR"] = "127.0.0.1:9200"
+	m["WORKER_METRICS_ADDR"] = "off"
+	m["OTLP_ENDPOINT"] = "http://localhost:4318"
+	m["TRACE_EXPORTER"] = "none"
+	cfg, err := FromLookup(env(m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MetricsAddr != "127.0.0.1:9200" || cfg.Worker.MetricsAddr != "" {
+		t.Errorf("metrics addresses = %q, %q; want 127.0.0.1:9200 and off", cfg.MetricsAddr, cfg.Worker.MetricsAddr)
+	}
+	if cfg.OTLPEndpoint != "http://localhost:4318" || cfg.TraceExporter != "none" {
+		t.Errorf("OTLPEndpoint = %q, TraceExporter = %q", cfg.OTLPEndpoint, cfg.TraceExporter)
+	}
+}
+
+func TestObservabilitySettingsAreValidated(t *testing.T) {
+	cases := []struct {
+		name string
+		set  map[string]string
+		want string
+	}{
+		{"metrics address without a port", map[string]string{"METRICS_ADDR": "localhost"}, "METRICS_ADDR"},
+		{"worker metrics address without a port", map[string]string{"WORKER_METRICS_ADDR": "9101"}, "WORKER_METRICS_ADDR"},
+		{"endpoint without a scheme", map[string]string{"OTLP_ENDPOINT": "localhost:4318"}, "OTLP_ENDPOINT"},
+		{"endpoint with credentials", map[string]string{"OTLP_ENDPOINT": "http://user:secret@localhost:4318"}, "OTLP_ENDPOINT"},
+		{"unknown trace exporter", map[string]string{"TRACE_EXPORTER": "jaeger"}, "TRACE_EXPORTER"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := minimal()
+			for k, v := range c.set {
+				m[k] = v
+			}
+			_, err := FromLookup(env(m))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error = %v, want it to mention %q", err, c.want)
+			}
+			if err != nil && strings.Contains(err.Error(), "secret") {
+				t.Errorf("error echoes the credential: %v", err)
+			}
+		})
 	}
 }
