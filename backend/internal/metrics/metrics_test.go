@@ -50,7 +50,9 @@ datanest_db_pool_wait_total{database="toko",pool="target"} 0
 
 func TestPoolCollectorReadsTheSourceAtEveryScrape(t *testing.T) {
 	inUse := 1
-	source := func() []PoolStats { return []PoolStats{{Pool: "target", Database: "toko", Stats: sql.DBStats{InUse: inUse}}} }
+	source := func() []PoolStats {
+		return []PoolStats{{Pool: "target", Database: "toko", Stats: sql.DBStats{InUse: inUse}}}
+	}
 	c := NewPoolCollector(source)
 	inUse = 4
 	if got := testutil.CollectAndCount(c, namespace+"_db_pool_connections"); got != 2 {
