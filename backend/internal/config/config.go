@@ -19,7 +19,8 @@ type Config struct {
 	// Built SPA served by the backend, relative to where the server runs (backend/).
 	FrontendDir string
 
-	PlatformDSN string
+	PlatformDSN          string
+	PlatformMaxOpenConns int
 
 	AMQPURL string
 
@@ -75,18 +76,19 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 	r := reader{lookup: lookup}
 
 	cfg := &Config{
-		AppPort:       r.str("APP_PORT", "8080"),
-		AllowedOrigin: r.str("ALLOWED_ORIGIN", "http://localhost:8080"),
-		CookieSecure:  r.boolean("COOKIE_SECURE", false),
-		FrontendDir:   r.str("FRONTEND_DIR", "../frontend/dist"),
-		PlatformDSN:   r.str("PLATFORM_DSN", ""),
-		AMQPURL:       r.str("AMQP_URL", ""),
-		LogLevel:      r.str("LOG_LEVEL", "info"),
-		TraceExporter: r.str("TRACE_EXPORTER", "console"),
-		OTLPEndpoint:  r.str("OTLP_ENDPOINT", ""),
-		MetricsAddr:   r.listenAddr("METRICS_ADDR", ":9100"),
-		AdminUsername: r.str("ADMIN_USERNAME", ""),
-		AdminPassword: r.str("ADMIN_PASSWORD", ""),
+		AppPort:              r.str("APP_PORT", "8080"),
+		AllowedOrigin:        r.str("ALLOWED_ORIGIN", "http://localhost:8080"),
+		CookieSecure:         r.boolean("COOKIE_SECURE", false),
+		FrontendDir:          r.str("FRONTEND_DIR", "../frontend/dist"),
+		PlatformDSN:          r.str("PLATFORM_DSN", ""),
+		PlatformMaxOpenConns: r.integer("PLATFORM_MAX_OPEN_CONNS", 20),
+		AMQPURL:              r.str("AMQP_URL", ""),
+		LogLevel:             r.str("LOG_LEVEL", "info"),
+		TraceExporter:        r.str("TRACE_EXPORTER", "console"),
+		OTLPEndpoint:         r.str("OTLP_ENDPOINT", ""),
+		MetricsAddr:          r.listenAddr("METRICS_ADDR", ":9100"),
+		AdminUsername:        r.str("ADMIN_USERNAME", ""),
+		AdminPassword:        r.str("ADMIN_PASSWORD", ""),
 		Session: SessionConfig{
 			IdleTimeout:      r.duration("SESSION_IDLE_TIMEOUT", 30*time.Minute),
 			AbsoluteTimeout:  r.duration("SESSION_ABSOLUTE_TIMEOUT", 8*time.Hour),
